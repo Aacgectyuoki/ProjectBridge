@@ -24,18 +24,33 @@ export default function AnalyzePage() {
     // Simulate API call to get analysis data
     const timer = setTimeout(() => {
       // Try to get data from localStorage
-      const resumeData = localStorage.getItem("resumeAnalysis")
-      const jobData = localStorage.getItem("jobAnalysis")
+      let resumeData = null
+      let jobData = null
+
+      try {
+        const resumeDataStr = localStorage.getItem("resumeAnalysis")
+        if (resumeDataStr) {
+          resumeData = JSON.parse(resumeDataStr)
+        }
+      } catch (error) {
+        console.error("Error parsing resume data from localStorage:", error)
+      }
+
+      try {
+        const jobDataStr = localStorage.getItem("jobAnalysis")
+        if (jobDataStr) {
+          jobData = JSON.parse(jobDataStr)
+        }
+      } catch (error) {
+        console.error("Error parsing job data from localStorage:", error)
+      }
 
       if (resumeData && jobData) {
         try {
-          const resumeAnalysis = JSON.parse(resumeData)
-          const jobAnalysis = JSON.parse(jobData)
-
           // Calculate match percentage based on skills
-          const resumeSkills = [...(resumeAnalysis.skills?.technical || []), ...(resumeAnalysis.skills?.soft || [])]
+          const resumeSkills = [...(resumeData.skills?.technical || []), ...(resumeData.skills?.soft || [])]
 
-          const jobSkills = [...(jobAnalysis.requiredSkills || []), ...(jobAnalysis.preferredSkills || [])]
+          const jobSkills = [...(jobData.requiredSkills || []), ...(jobData.preferredSkills || [])]
 
           // Find matching skills
           const matchedSkills = resumeSkills.filter((skill) =>
@@ -59,7 +74,7 @@ export default function AnalyzePage() {
             .map((skill) => ({
               name: skill,
               level: "Required",
-              priority: jobAnalysis.requiredSkills.includes(skill) ? "High" : "Medium",
+              priority: jobData.requiredSkills.includes(skill) ? "High" : "Medium",
             }))
 
           // Calculate match percentage
@@ -70,13 +85,13 @@ export default function AnalyzePage() {
             missingSkills,
             matchedSkills: matchedSkills.map((skill) => ({
               name: skill,
-              level: resumeAnalysis.skills.technical.includes(skill) ? "Technical" : "Soft",
+              level: resumeData.skills.technical.includes(skill) ? "Technical" : "Soft",
             })),
-            resumeAnalysis,
-            jobAnalysis,
+            resumeAnalysis: resumeData,
+            jobAnalysis: jobData,
           })
         } catch (error) {
-          console.error("Error parsing analysis data:", error)
+          console.error("Error calculating skill matches:", error)
           // Fallback to mock data
           setAnalysisData(mockAnalysisData)
         }
@@ -101,7 +116,11 @@ export default function AnalyzePage() {
 
       if (projectIdeas && projectIdeas.length > 0) {
         // Save project ideas to localStorage
-        localStorage.setItem("projectIdeas", JSON.stringify(projectIdeas))
+        try {
+          localStorage.setItem("projectIdeas", JSON.stringify(projectIdeas))
+        } catch (error) {
+          console.error("Error saving project ideas to localStorage:", error)
+        }
 
         toast({
           title: "Project ideas generated",

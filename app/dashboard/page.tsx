@@ -22,9 +22,12 @@ export default function Dashboard() {
   const [jobData, setJobData] = useState(null)
   const [jobAnalysis, setJobAnalysis] = useState<JobAnalysisResult | null>(null)
   const [roleFocus, setRoleFocus] = useState("")
+  const [fileSelected, setFileSelected] = useState(false)
+  const [fileUploaded, setFileUploaded] = useState(false)
 
   const handleResumeUpload = (data) => {
     setResumeData(data)
+    setFileUploaded(true)
     if (data.analysis) {
       setResumeAnalysis(data.analysis)
     }
@@ -32,6 +35,10 @@ export default function Dashboard() {
       setActiveStep(2)
       setActiveTab("job")
     }
+  }
+
+  const handleFileSelection = (selected) => {
+    setFileSelected(selected)
   }
 
   const handleJobDescriptionSubmit = (data) => {
@@ -114,7 +121,7 @@ export default function Dashboard() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResumeUpload onUpload={handleResumeUpload} />
+                  <ResumeUpload onUpload={handleResumeUpload} onFileSelect={handleFileSelection} />
                 </CardContent>
                 <CardFooter className="flex justify-between">
                   <Button variant="outline" disabled>
@@ -122,12 +129,12 @@ export default function Dashboard() {
                   </Button>
                   <Button
                     onClick={() => {
-                      if (resumeData) {
+                      if (resumeData || fileUploaded) {
                         setActiveStep(2)
                         setActiveTab("job")
                       }
                     }}
-                    disabled={!resumeData}
+                    disabled={!resumeData && !fileUploaded}
                     className="gap-1.5"
                   >
                     Next

@@ -21,6 +21,13 @@ export function JobDescriptionInput({ onSubmit }) {
         const analysisResult = await analyzeJobDescription(jobDescription)
         setIsProcessing(false)
 
+        // Store the analysis result in localStorage for later use
+        try {
+          localStorage.setItem("jobAnalysis", JSON.stringify(analysisResult))
+        } catch (error) {
+          console.error("Error saving job analysis to localStorage:", error)
+        }
+
         onSubmit({
           text: jobDescription,
           analysis: analysisResult,

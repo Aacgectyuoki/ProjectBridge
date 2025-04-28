@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { analyzeResume } from "@/app/actions/analyze-resume"
 import { useToast } from "@/hooks/use-toast"
 
-export function ResumeUpload({ onUpload }) {
+export function ResumeUpload({ onUpload, onFileSelect }) {
   const [file, setFile] = useState(null)
   const [linkedinUrl, setLinkedinUrl] = useState("")
   const [resumeText, setResumeText] = useState("")
@@ -19,14 +19,32 @@ export function ResumeUpload({ onUpload }) {
   const { toast } = useToast()
 
   const handleFileChange = async (e) => {
-    const selectedFile = e.target.files[0]
+    const selectedFile = e.target.files?.[0]
     if (selectedFile) {
       setFile(selectedFile)
+      // Notify parent component that a file has been selected
+      if (onFileSelect) {
+        onFileSelect(true)
+      }
 
       // Read file content if it's a text file
       if (selectedFile.type === "text/plain") {
-        const text = await selectedFile.text()
-        setResumeText(text)
+        try {
+          const text = await selectedFile.text()
+          setResumeText(text)
+        } catch (error) {
+          console.error("Error reading file:", error)
+          toast({
+            title: "Error reading file",
+            description: "Could not read the file content. Please try again.",
+            variant: "destructive",
+          })
+        }
+      }
+    } else {
+      // Notify parent component that no file is selected
+      if (onFileSelect) {
+        onFileSelect(false)
       }
     }
   }
@@ -56,6 +74,13 @@ export function ResumeUpload({ onUpload }) {
           analysis: analysisResult,
         })
 
+        // Store the analysis result in localStorage for later use
+        try {
+          localStorage.setItem("resumeAnalysis", JSON.stringify(analysisResult))
+        } catch (error) {
+          console.error("Error saving resume analysis to localStorage:", error)
+        }
+
         toast({
           title: "Resume analyzed successfully",
           description: `Found ${analysisResult.skills.technical.length} technical skills and ${analysisResult.experience.length} work experiences.`,
@@ -71,12 +96,103 @@ export function ResumeUpload({ onUpload }) {
     }
   }
 
-  const simulateUpload = (file) => {
-    setIsUploading(true)
-    setTimeout(() => {
-      setIsUploading(false)
-      onUpload({ type: "file", data: file })
-    }, 1500)
+  const handleFileUpload = async (e) => {
+    e.preventDefault()
+    if (file) {
+      setIsUploading(true)
+
+      try {
+        // For text files, we can analyze directly
+        if (file.type === "text/plain") {
+          const text = await file.text()
+          const analysisResult = await analyzeResume(text)
+
+          // Store the analysis result in localStorage for later use
+          try {
+            localStorage.setItem("resumeAnalysis", JSON.stringify(analysisResult))
+          } catch (error) {
+            console.error("Error saving resume analysis to localStorage:", error)
+          }
+
+          setIsUploading(false)
+          onUpload({
+            type: "file",
+            data: {
+              name: file.name,
+              type: file.type,
+              size: file.size,
+            },
+            analysis: analysisResult,
+          })
+
+          toast({
+            title: "Resume analyzed successfully",
+            description: `Found ${analysisResult.skills.technical.length} technical skills and ${analysisResult.experience.length} work experiences.`,
+          })
+        } else {
+          // For non-text files (PDF, DOCX), in a real app you would:
+          // 1. Upload the file to a server
+          // 2. Parse the file on the server
+          // 3. Return the parsed content
+
+          // For now, we'll simulate this with a mock analysis after a delay
+          setTimeout(async () => {
+            // Create a mock resume text for demonstration
+            const mockResumeText = `
+              John Doe
+              Software Developer
+              
+              SKILLS
+              JavaScript, React, Node.js, HTML, CSS
+              
+              EXPERIENCE
+              Senior Developer at Tech Co (2020-Present)
+              - Developed web applications using React and Node.js
+              - Led a team of 5 developers
+              
+              Junior Developer at Startup Inc (2018-2020)
+              - Built responsive websites
+              - Worked with REST APIs
+              
+              EDUCATION
+              Bachelor of Computer Science, University of Technology (2018)
+            `
+
+            const analysisResult = await analyzeResume(mockResumeText)
+
+            // Store the analysis result in localStorage for later use
+            try {
+              localStorage.setItem("resumeAnalysis", JSON.stringify(analysisResult))
+            } catch (error) {
+              console.error("Error saving resume analysis to localStorage:", error)
+            }
+
+            setIsUploading(false)
+            onUpload({
+              type: "file",
+              data: {
+                name: file.name,
+                type: file.type,
+                size: file.size,
+              },
+              analysis: analysisResult,
+            })
+
+            toast({
+              title: "Resume analyzed successfully",
+              description: `Found ${analysisResult.skills.technical.length} technical skills and ${analysisResult.experience.length} work experiences.`,
+            })
+          }, 2000)
+        }
+      } catch (error) {
+        setIsUploading(false)
+        toast({
+          title: "Analysis failed",
+          description: error.message || "Failed to analyze resume",
+          variant: "destructive",
+        })
+      }
+    }
   }
 
   return (
@@ -95,12 +211,8 @@ export function ResumeUpload({ onUpload }) {
           {file && <p className="text-sm text-gray-500">Selected file: {file.name}</p>}
         </div>
         <div className="flex justify-center">
-          <Button
-            onClick={() => file && onUpload({ type: "file", data: file })}
-            disabled={!file || isUploading}
-            className="gap-1.5"
-          >
-            {isUploading ? "Uploading..." : "Upload Resume"}
+          <Button onClick={handleFileUpload} disabled={!file || isUploading} className="gap-1.5">
+            {isUploading ? "Analyzing..." : "Upload Resume"}
             <Upload className="h-4 w-4" />
           </Button>
         </div>
