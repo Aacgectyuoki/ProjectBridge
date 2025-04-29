@@ -4,6 +4,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { SkillsLogger } from "@/utils/skills-logger"
 
 export function RoleFocusSelect({ onSubmit }) {
   const [selectedFocus, setSelectedFocus] = useState("")
@@ -11,6 +12,9 @@ export function RoleFocusSelect({ onSubmit }) {
   const handleSubmit = (e) => {
     e.preventDefault()
     if (selectedFocus) {
+      // Log the selected role focus
+      SkillsLogger.logRoleFocus(selectedFocus)
+
       onSubmit(selectedFocus)
     }
   }

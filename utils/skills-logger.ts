@@ -1,0 +1,132 @@
+type SkillsLogData = {
+  technicalSkills: string[]
+  softSkills: string[]
+  timestamp: string
+  source: string
+}
+
+export class SkillsLogger {
+  static logSkills(technicalSkills: string[], softSkills: string[], source = "resume"): void {
+    const logData: SkillsLogData = {
+      technicalSkills,
+      softSkills,
+      timestamp: new Date().toISOString(),
+      source,
+    }
+
+    // Log to console
+    console.group("Skills Analysis Log")
+    console.log(`Source: ${source}`)
+    console.log(`Time: ${new Date().toLocaleTimeString()}`)
+    console.log("Technical Skills:", technicalSkills)
+    console.log("Soft Skills:", softSkills)
+    console.groupEnd()
+
+    // Store in localStorage for persistence
+    try {
+      const existingLogs = localStorage.getItem("skillsAnalysisLogs")
+      let logs: SkillsLogData[] = []
+
+      if (existingLogs) {
+        logs = JSON.parse(existingLogs)
+      }
+
+      logs.push(logData)
+      localStorage.setItem("skillsAnalysisLogs", JSON.stringify(logs))
+    } catch (error) {
+      console.error("Error saving skills log:", error)
+    }
+  }
+
+  static getSkillsLogs(): SkillsLogData[] {
+    try {
+      const logs = localStorage.getItem("skillsAnalysisLogs")
+      return logs ? JSON.parse(logs) : []
+    } catch (error) {
+      console.error("Error retrieving skills logs:", error)
+      return []
+    }
+  }
+
+  static clearLogs(): void {
+    localStorage.removeItem("skillsAnalysisLogs")
+  }
+
+  // Add a method to get a complete list of all skills detected
+  static getAllDetectedSkills(): { technical: string[]; soft: string[] } {
+    const logs = this.getSkillsLogs()
+
+    // Create sets to avoid duplicates
+    const technicalSkillsSet = new Set<string>()
+    const softSkillsSet = new Set<string>()
+
+    logs.forEach((log) => {
+      log.technicalSkills.forEach((skill) => technicalSkillsSet.add(skill))
+      log.softSkills.forEach((skill) => softSkillsSet.add(skill))
+    })
+
+    return {
+      technical: Array.from(technicalSkillsSet),
+      soft: Array.from(softSkillsSet),
+    }
+  }
+
+  static logRoleFocus(roleFocus: string): void {
+    console.group("Role Focus Selection")
+    console.log(`Selected Role: ${roleFocus}`)
+    console.log(`Time: ${new Date().toLocaleTimeString()}`)
+    console.groupEnd()
+
+    // Store in localStorage for persistence
+    try {
+      const existingLogs = localStorage.getItem("skillsAnalysisLogs")
+      let logs = []
+
+      if (existingLogs) {
+        logs = JSON.parse(existingLogs)
+      }
+
+      logs.push({
+        roleFocus,
+        timestamp: new Date().toISOString(),
+        source: "role-selection",
+        technicalSkills: [],
+        softSkills: [],
+      })
+      localStorage.setItem("skillsAnalysisLogs", JSON.stringify(logs))
+    } catch (error) {
+      console.error("Error saving role focus log:", error)
+    }
+  }
+
+  static logJobSkills(requiredSkills: string[], preferredSkills: string[]): void {
+    const logData = {
+      requiredSkills,
+      preferredSkills,
+      timestamp: new Date().toISOString(),
+      source: "job-description",
+    }
+
+    // Log to console
+    console.group("Job Skills Analysis Log")
+    console.log(`Time: ${new Date().toLocaleTimeString()}`)
+    console.log("Required Skills:", requiredSkills)
+    console.log("Preferred Skills:", preferredSkills)
+    console.groupEnd()
+
+    // Store in localStorage for persistence
+    try {
+      const existingLogs = localStorage.getItem("jobSkillsLogs")
+      let logs = []
+
+      if (existingLogs) {
+        logs = JSON.parse(existingLogs)
+      }
+
+      logs.push(logData)
+      localStorage.setItem("jobSkillsLogs", JSON.stringify(logs))
+    } catch (error) {
+      console.error("Error saving job skills log:", error)
+    }
+  }
+}

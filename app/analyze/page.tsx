@@ -3,27 +3,82 @@
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { Code, ArrowRight, CheckCircle, XCircle } from "lucide-react"
-import { SkillGapCard } from "@/components/skill-gap-card"
+import { Code, ArrowRight } from "lucide-react"
+import { SkillsGapAnalysis } from "@/components/skills-gap-analysis"
 import { generateProjectIdeas } from "@/app/actions/generate-project-ideas"
+import { analyzeSkillsGapFromResults } from "@/app/actions/analyze-skills-gap"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
+import type { SkillGapAnalysisResult } from "@/app/actions/analyze-skills-gap"
 
 export default function AnalyzePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isGeneratingProjects, setIsGeneratingProjects] = useState(false)
-  const [analysisData, setAnalysisData] = useState(null)
+  const [analysisData, setAnalysisData] = useState<SkillGapAnalysisResult | null>(null)
   const router = useRouter()
   const { toast } = useToast()
 
-  // In a real app, this would come from a database or context
-  // For now, we'll use mock data and localStorage
   useEffect(() => {
-    // Simulate API call to get analysis data
-    const timer = setTimeout(() => {
-      // Try to get data from localStorage
+    const fetchAnalysis = async () => {
+      setIsLoading(true)
+
+      try {
+        // Try to get data from localStorage
+        let resumeData = null
+        let jobData = null
+
+        try {
+          const resumeDataStr = localStorage.getItem("resumeAnalysis")
+          if (resumeDataStr) {
+            resumeData = JSON.parse(resumeDataStr)
+          }
+        } catch (error) {
+          console.error("Error parsing resume data from localStorage:", error)
+        }
+
+        try {
+          const jobDataStr = localStorage.getItem("jobAnalysis")
+          if (jobDataStr) {
+            jobData = JSON.parse(jobDataStr)
+          }
+        } catch (error) {
+          console.error("Error parsing job data from localStorage:", error)
+        }
+
+        if (resumeData && jobData) {
+          // Use our new analysis function
+          const gapAnalysis = await analyzeSkillsGapFromResults(resumeData, jobData)
+          setAnalysisData(gapAnalysis)
+        } else {
+          // Fallback to mock data
+          setAnalysisData(mockAnalysisData)
+        }
+      } catch (error) {
+        console.error("Error performing skills gap analysis:", error)
+        toast({
+          title: "Analysis Error",
+          description: "There was a problem analyzing your skills gap. Please try again.",
+          variant: "destructive",
+        })
+        // Fallback to mock data
+        setAnalysisData(mockAnalysisData)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchAnalysis()
+  }, [toast])
+
+  const handleGenerateProjects = async () => {
+    if (!analysisData) return
+
+    try {
+      setIsGeneratingProjects(true)
+
+      // Get the resume and job data from localStorage
       let resumeData = null
       let jobData = null
 
@@ -46,91 +101,28 @@ export default function AnalyzePage() {
       }
 
       if (resumeData && jobData) {
-        try {
-          // Calculate match percentage based on skills
-          const resumeSkills = [...(resumeData.skills?.technical || []), ...(resumeData.skills?.soft || [])]
+        const projectIdeas = await generateProjectIdeas(resumeData, jobData)
 
-          const jobSkills = [...(jobData.requiredSkills || []), ...(jobData.preferredSkills || [])]
+        if (projectIdeas && projectIdeas.length > 0) {
+          // Save project ideas to localStorage
+          try {
+            localStorage.setItem("projectIdeas", JSON.stringify(projectIdeas))
+          } catch (error) {
+            console.error("Error saving project ideas to localStorage:", error)
+          }
 
-          // Find matching skills
-          const matchedSkills = resumeSkills.filter((skill) =>
-            jobSkills.some(
-              (jobSkill) =>
-                jobSkill.toLowerCase().includes(skill.toLowerCase()) ||
-                skill.toLowerCase().includes(jobSkill.toLowerCase()),
-            ),
-          )
-
-          // Find missing skills
-          const missingSkills = jobSkills
-            .filter(
-              (skill) =>
-                !resumeSkills.some(
-                  (resumeSkill) =>
-                    resumeSkill.toLowerCase().includes(skill.toLowerCase()) ||
-                    skill.toLowerCase().includes(resumeSkill.toLowerCase()),
-                ),
-            )
-            .map((skill) => ({
-              name: skill,
-              level: "Required",
-              priority: jobData.requiredSkills.includes(skill) ? "High" : "Medium",
-            }))
-
-          // Calculate match percentage
-          const matchPercentage = jobSkills.length > 0 ? Math.round((matchedSkills.length / jobSkills.length) * 100) : 0
-
-          setAnalysisData({
-            matchPercentage,
-            missingSkills,
-            matchedSkills: matchedSkills.map((skill) => ({
-              name: skill,
-              level: resumeData.skills.technical.includes(skill) ? "Technical" : "Soft",
-            })),
-            resumeAnalysis: resumeData,
-            jobAnalysis: jobData,
+          toast({
+            title: "Project ideas generated",
+            description: `Generated ${projectIdeas.length} project ideas to help you bridge the skills gap.`,
           })
-        } catch (error) {
-          console.error("Error calculating skill matches:", error)
-          // Fallback to mock data
-          setAnalysisData(mockAnalysisData)
+
+          // Navigate to projects page
+          router.push("/projects")
+        } else {
+          throw new Error("Failed to generate project ideas")
         }
       } else {
-        // Fallback to mock data
-        setAnalysisData(mockAnalysisData)
-      }
-
-      setIsLoading(false)
-    }, 2000)
-
-    return () => clearTimeout(timer)
-  }, [])
-
-  const handleGenerateProjects = async () => {
-    if (!analysisData) return
-
-    try {
-      setIsGeneratingProjects(true)
-
-      const projectIdeas = await generateProjectIdeas(analysisData.resumeAnalysis, analysisData.jobAnalysis)
-
-      if (projectIdeas && projectIdeas.length > 0) {
-        // Save project ideas to localStorage
-        try {
-          localStorage.setItem("projectIdeas", JSON.stringify(projectIdeas))
-        } catch (error) {
-          console.error("Error saving project ideas to localStorage:", error)
-        }
-
-        toast({
-          title: "Project ideas generated",
-          description: `Generated ${projectIdeas.length} project ideas to help you bridge the skills gap.`,
-        })
-
-        // Navigate to projects page
-        router.push("/projects")
-      } else {
-        throw new Error("Failed to generate project ideas")
+        throw new Error("Missing resume or job data")
       }
     } catch (error) {
       console.error("Error generating project ideas:", error)
@@ -177,62 +169,26 @@ export default function AnalyzePage() {
             </Card>
           ) : (
             <>
-              <Card className="mb-8">
-                <CardHeader>
-                  <CardTitle>Skills Match</CardTitle>
-                  <CardDescription>
-                    Your resume matches {analysisData.matchPercentage}% of the job requirements
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <Progress value={analysisData.matchPercentage} className="h-2" />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <h3 className="text-lg font-medium mb-2 flex items-center gap-2">
-                          <CheckCircle className="h-5 w-5 text-green-500" />
-                          Skills You Have
-                        </h3>
-                        <ul className="space-y-2">
-                          {analysisData.matchedSkills.map((skill, index) => (
-                            <li key={index} className="flex justify-between text-sm p-2 bg-green-50 rounded">
-                              <span>{skill.name}</span>
-                              <span className="text-gray-500">{skill.level}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-medium mb-2 flex items-center gap-2">
-                          <XCircle className="h-5 w-5 text-red-500" />
-                          Skills You Need
-                        </h3>
-                        <ul className="space-y-2">
-                          {analysisData.missingSkills.map((skill, index) => (
-                            <li key={index} className="flex justify-between text-sm p-2 bg-red-50 rounded">
-                              <span>{skill.name}</span>
-                              <span className="text-gray-500">{skill.priority}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-                <CardFooter>
-                  <Button className="w-full gap-1.5" onClick={handleGenerateProjects} disabled={isGeneratingProjects}>
-                    {isGeneratingProjects ? "Generating Project Ideas..." : "Generate Project Ideas"}
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </CardFooter>
-              </Card>
+              {analysisData && (
+                <>
+                  <SkillsGapAnalysis analysis={analysisData} />
 
-              <div className="space-y-6">
-                <h2 className="text-2xl font-bold">Skill Gap Details</h2>
-                {analysisData.missingSkills.map((skill, index) => (
-                  <SkillGapCard key={index} skill={skill} />
-                ))}
-              </div>
+                  <div className="mt-8">
+                    <Button className="w-full gap-1.5" onClick={handleGenerateProjects} disabled={isGeneratingProjects}>
+                      {isGeneratingProjects ? "Generating Project Ideas..." : "Generate Project Ideas"}
+                      <ArrowRight className="h-4 w-4" />
+                    </Button>
+
+                    {/* Add this new button */}
+                    <Link href="/ai-analysis" className="block mt-4">
+                      <Button variant="outline" className="w-full gap-1.5">
+                        View AI Engineering Skills Analysis
+                        <ArrowRight className="h-4 w-4" />
+                      </Button>
+                    </Link>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
@@ -241,28 +197,69 @@ export default function AnalyzePage() {
   )
 }
 
-// Mock data - in a real app, this would come from API
-const mockAnalysisData = {
+// Mock data for testing
+const mockAnalysisData: SkillGapAnalysisResult = {
   matchPercentage: 65,
   missingSkills: [
-    { name: "React", level: "Advanced", priority: "High" },
-    { name: "TypeScript", level: "Intermediate", priority: "Medium" },
-    { name: "GraphQL", level: "Beginner", priority: "Low" },
+    {
+      name: "React",
+      level: "Advanced",
+      priority: "High",
+      context:
+        "The job requires building and maintaining complex React applications with state management and performance optimization.",
+    },
+    {
+      name: "TypeScript",
+      level: "Intermediate",
+      priority: "Medium",
+      context: "TypeScript is used throughout the codebase for type safety and better developer experience.",
+    },
+    {
+      name: "GraphQL",
+      level: "Beginner",
+      priority: "Low",
+      context: "The team is starting to adopt GraphQL for some API endpoints.",
+    },
+  ],
+  missingQualifications: [
+    {
+      description: "Bachelor's degree in Computer Science or related field",
+      importance: "Preferred",
+      alternative: "Equivalent practical experience or bootcamp certification",
+    },
+  ],
+  missingExperience: [
+    {
+      area: "Frontend Development",
+      yearsNeeded: "3+ years",
+      suggestion: "Contribute to open-source React projects to build verifiable experience",
+    },
   ],
   matchedSkills: [
-    { name: "JavaScript", level: "Advanced" },
-    { name: "HTML/CSS", level: "Advanced" },
-    { name: "Node.js", level: "Intermediate" },
+    { name: "JavaScript", proficiency: "Advanced", relevance: "High" },
+    { name: "HTML/CSS", proficiency: "Advanced", relevance: "Medium" },
+    { name: "Node.js", proficiency: "Intermediate", relevance: "Low" },
   ],
-  resumeAnalysis: {
-    skills: {
-      technical: ["JavaScript", "HTML/CSS", "Node.js"],
-      soft: ["Communication", "Problem Solving"],
+  recommendations: [
+    {
+      type: "Project",
+      description: "Build a full-featured React application with TypeScript, Redux, and GraphQL integration",
+      timeToAcquire: "2-3 months",
+      priority: "High",
     },
-  },
-  jobAnalysis: {
-    title: "Frontend Developer",
-    requiredSkills: ["JavaScript", "React", "TypeScript", "HTML/CSS"],
-    preferredSkills: ["GraphQL", "Node.js"],
-  },
+    {
+      type: "Course",
+      description: "Complete a comprehensive TypeScript course with focus on React integration",
+      timeToAcquire: "3-4 weeks",
+      priority: "Medium",
+    },
+    {
+      type: "Certification",
+      description: "Obtain a React developer certification to validate your skills",
+      timeToAcquire: "1-2 months",
+      priority: "Low",
+    },
+  ],
+  summary:
+    "You have a solid foundation in JavaScript and web fundamentals, but need to develop more specialized skills in React and TypeScript to be competitive for this role. Focus on building practical experience with these technologies through projects and structured learning.",
 }

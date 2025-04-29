@@ -11,8 +11,10 @@ import { JobDescriptionInput } from "@/components/job-description-input"
 import { RoleFocusSelect } from "@/components/role-focus-select"
 import { ResumeAnalysisResults } from "@/components/resume-analysis-results"
 import { JobAnalysisResults } from "@/components/job-analysis-results"
+import { SkillsSummary } from "@/components/skills-summary"
 import type { ResumeAnalysisResult } from "@/app/actions/analyze-resume"
 import type { JobAnalysisResult } from "@/app/actions/analyze-job-description"
+import { SkillsLogViewer } from "@/components/skills-log-viewer"
 
 export default function Dashboard() {
   const [activeStep, setActiveStep] = useState(1)
@@ -24,16 +26,26 @@ export default function Dashboard() {
   const [roleFocus, setRoleFocus] = useState("")
   const [fileSelected, setFileSelected] = useState(false)
   const [fileUploaded, setFileUploaded] = useState(false)
+  const [showSkillsSummary, setShowSkillsSummary] = useState(false)
 
   const handleResumeUpload = (data) => {
     setResumeData(data)
     setFileUploaded(true)
     if (data.analysis) {
       setResumeAnalysis(data.analysis)
+      setShowSkillsSummary(true)
+
+      // Log detected skills to console
+      console.log("Resume Analysis Complete:")
+      console.log("Technical Skills:", data.analysis.skills?.technical || [])
+      console.log("Soft Skills:", data.analysis.skills?.soft || [])
+      console.log("Experience:", data.analysis.experience?.length || 0, "entries")
+      console.log("Education:", data.analysis.education?.length || 0, "entries")
     }
     if (data) {
       setActiveStep(2)
-      setActiveTab("job")
+      // Don't automatically switch to job tab so user can see skills summary
+      // setActiveTab("job")
     }
   }
 
@@ -143,6 +155,12 @@ export default function Dashboard() {
                 </CardFooter>
               </Card>
 
+              {showSkillsSummary && resumeAnalysis && (
+                <div className="mt-8">
+                  <SkillsSummary analysis={resumeAnalysis} />
+                </div>
+              )}
+
               {resumeAnalysis && (
                 <div className="mt-8">
                   <ResumeAnalysisResults analysis={resumeAnalysis} />
@@ -224,6 +242,7 @@ export default function Dashboard() {
             </TabsContent>
           </Tabs>
         </div>
+        <SkillsLogViewer />
       </main>
     </div>
   )
