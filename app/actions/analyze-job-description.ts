@@ -2,6 +2,7 @@
 
 import { generateText } from "ai"
 import { groq } from "@ai-sdk/groq"
+import { SkillsLogger } from "@/utils/skills-logger"
 
 export type JobAnalysisResult = {
   title: string
@@ -131,6 +132,20 @@ export async function analyzeJobDescription(jobDescriptionText: string): Promise
         } else {
           throw new Error("Could not extract valid JSON from response")
         }
+      }
+
+      // Log the extracted skills
+      if (result.requiredSkills?.length > 0 || result.preferredSkills?.length > 0) {
+        SkillsLogger.logSkills({
+          source: "job-description",
+          technicalSkills: [...(result.requiredSkills || []), ...(result.preferredSkills || [])].filter(Boolean),
+          softSkills: [],
+          timestamp: new Date().toISOString(),
+        })
+        console.log("Logged job description skills:", [
+          ...(result.requiredSkills || []),
+          ...(result.preferredSkills || []),
+        ])
       }
 
       // Ensure the result has the expected structure

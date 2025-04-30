@@ -1,11 +1,16 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Clock, Code, Github, ExternalLink, BookOpen, Star } from "lucide-react"
+import { Progress } from "@/components/ui/progress"
+import { Clock, Code, Github, ExternalLink, BookOpen, Star, TrendingUp, FileText, CheckCircle2 } from "lucide-react"
+import { ProjectRecommendationsLogger } from "@/utils/project-recommendations-logger"
+import { calculateResumeBoost } from "@/utils/resume-boost-calculator"
+import type { ResumeAnalysisResult } from "@/app/actions/analyze-resume"
+import type { JobAnalysisResult } from "@/app/actions/analyze-job-description"
 
 // Sample AI project recommendations based on common skill gaps
 const aiProjects = [
@@ -34,6 +39,7 @@ const aiProjects = [
       { name: "ReAct Pattern Explained", url: "https://www.promptingguide.ai/techniques/react" },
     ],
     githubRepo: "https://github.com/langchain-ai/langchainjs",
+    tools: ["LangChain.js", "TypeScript", "Node.js", "OpenAI API", "Vector Database"],
   },
   {
     id: "rag-system",
@@ -60,6 +66,7 @@ const aiProjects = [
       },
     ],
     githubRepo: "https://github.com/run-llama/llama_index",
+    tools: ["LangChain", "TypeScript", "Pinecone", "OpenAI Embeddings", "Next.js"],
   },
   {
     id: "multimodal-ai",
@@ -83,12 +90,41 @@ const aiProjects = [
       { name: "Computer Vision Fundamentals", url: "https://www.coursera.org/learn/computer-vision-basics" },
     ],
     githubRepo: "https://github.com/vercel/ai",
+    tools: ["Next.js", "React", "TypeScript", "GPT-4 Vision", "TensorFlow.js"],
   },
 ]
 
-export function AIProjectRecommendations() {
+interface AIProjectRecommendationsProps {
+  resumeAnalysis?: ResumeAnalysisResult
+  jobAnalysis?: JobAnalysisResult
+  jobTitle?: string
+}
+
+export function AIProjectRecommendations({
+  resumeAnalysis,
+  jobAnalysis,
+  jobTitle = "AI Engineer",
+}: AIProjectRecommendationsProps) {
   const [selectedProject, setSelectedProject] = useState(aiProjects[0])
   const [activeTab, setActiveTab] = useState("details")
+  const [resumeBoost, setResumeBoost] = useState<any>(null)
+
+  useEffect(() => {
+    if (resumeAnalysis && jobAnalysis && selectedProject) {
+      const boost = calculateResumeBoost(selectedProject, resumeAnalysis, jobAnalysis)
+      setResumeBoost(boost)
+
+      // Log the recommendation
+      ProjectRecommendationsLogger.logRecommendation(
+        selectedProject.id,
+        selectedProject.title,
+        selectedProject.skillsAddressed,
+        jobTitle,
+        boost.matchImprovement,
+        boost.currentMatchPercentage,
+      )
+    }
+  }, [selectedProject, resumeAnalysis, jobAnalysis, jobTitle])
 
   return (
     <Card className="mt-6">
@@ -129,16 +165,24 @@ export function AIProjectRecommendations() {
                     </Badge>
                   )}
                 </div>
+
+                {resumeBoost && selectedProject.id === project.id && resumeBoost.matchImprovement > 0 && (
+                  <div className="flex items-center gap-1 mt-2 text-xs text-green-600">
+                    <TrendingUp className="h-3 w-3" />
+                    <span>+{resumeBoost.matchImprovement}% match improvement</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
 
           <div className="md:col-span-2">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-4">
                 <TabsTrigger value="details">Details</TabsTrigger>
                 <TabsTrigger value="steps">Steps</TabsTrigger>
                 <TabsTrigger value="resources">Resources</TabsTrigger>
+                <TabsTrigger value="resume-boost">Resume Boost</TabsTrigger>
               </TabsList>
 
               <TabsContent value="details" className="space-y-4 pt-4">
@@ -223,6 +267,101 @@ export function AIProjectRecommendations() {
                       </a>
                     ))}
                   </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="resume-boost" className="pt-4">
+                <div className="space-y-6">
+                  <h3 className="font-medium">Resume Match Improvement</h3>
+
+                  {resumeBoost ? (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span>Current Match</span>
+                          <span className="font-medium">{resumeBoost.currentMatchPercentage}%</span>
+                        </div>
+                        <Progress value={resumeBoost.currentMatchPercentage} className="h-2" />
+
+                        <div className="flex justify-between text-sm mt-4">
+                          <span>Projected Match After Project</span>
+                          <span className="font-medium text-green-600">{resumeBoost.projectedMatchPercentage}%</span>
+                        </div>
+                        <Progress value={resumeBoost.projectedMatchPercentage} className="h-2 bg-gray-100">
+                          <div
+                            className="h-full bg-green-500"
+                            style={{ width: `${resumeBoost.currentMatchPercentage}%` }}
+                          />
+                          <div
+                            className="h-full bg-green-300"
+                            style={{
+                              width: `${resumeBoost.matchImprovement}%`,
+                              marginLeft: `${resumeBoost.currentMatchPercentage}%`,
+                            }}
+                          />
+                        </Progress>
+
+                        <div className="flex items-center gap-1 mt-1 text-sm text-green-600">
+                          <TrendingUp className="h-4 w-4" />
+                          <span>+{resumeBoost.matchImprovement}% match improvement</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-medium">Key Skills You'll Gain</h4>
+                        <div className="flex flex-wrap gap-2">
+                          {resumeBoost.keySkillsAddressed.map((skill: string, index: number) => (
+                            <Badge
+                              key={index}
+                              variant="outline"
+                              className="bg-green-50 text-green-700 border-green-200"
+                            >
+                              {skill}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h4 className="text-sm font-medium">Resume Enhancement Tips</h4>
+                        <div className="space-y-2">
+                          {resumeBoost.resumeEnhancementSuggestions.map((suggestion: string, index: number) => (
+                            <div key={index} className="flex items-start gap-2 text-sm">
+                              <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 flex-shrink-0" />
+                              <span>{suggestion}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="bg-amber-50 border border-amber-200 rounded-md p-3 mt-4">
+                        <div className="flex items-start gap-2">
+                          <FileText className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <h4 className="font-medium text-amber-800">Resume Section Example</h4>
+                            <div className="mt-2 text-sm text-amber-700 font-mono bg-white p-2 rounded border border-amber-100">
+                              <strong>Projects</strong>
+                              <br />
+                              <strong>{selectedProject.title}</strong> | Personal Project
+                              <br />• Developed a {selectedProject.description.toLowerCase()}
+                              <br />• Implemented {selectedProject.skillsAddressed.slice(0, 3).join(", ")} to solve
+                              real-world problems
+                              <br />• Used {selectedProject.tools.slice(0, 3).join(", ")} to build a production-ready
+                              application
+                              <br />• GitHub:{" "}
+                              <span className="text-blue-600">
+                                {selectedProject.githubRepo.split("github.com/")[1]}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      Resume and job analysis data required to calculate match improvement
+                    </div>
+                  )}
                 </div>
               </TabsContent>
             </Tabs>

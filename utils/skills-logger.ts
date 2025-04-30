@@ -61,8 +61,24 @@ export class SkillsLogger {
     const softSkillsSet = new Set<string>()
 
     logs.forEach((log) => {
-      log.technicalSkills.forEach((skill) => technicalSkillsSet.add(skill))
-      log.softSkills.forEach((skill) => softSkillsSet.add(skill))
+      // Check if technicalSkills exists and is an array before using forEach
+      if (log.technicalSkills && Array.isArray(log.technicalSkills)) {
+        log.technicalSkills.forEach((skill) => technicalSkillsSet.add(skill))
+      }
+
+      // Check if softSkills exists and is an array before using forEach
+      if (log.softSkills && Array.isArray(log.softSkills)) {
+        log.softSkills.forEach((skill) => softSkillsSet.add(skill))
+      }
+
+      // Handle job description logs with requiredSkills and preferredSkills
+      if (log.requiredSkills && Array.isArray(log.requiredSkills)) {
+        log.requiredSkills.forEach((skill) => technicalSkillsSet.add(skill))
+      }
+
+      if (log.preferredSkills && Array.isArray(log.preferredSkills)) {
+        log.preferredSkills.forEach((skill) => technicalSkillsSet.add(skill))
+      }
     })
 
     return {

@@ -103,6 +103,40 @@ Object.entries(abbreviationMap).forEach(([abbr, fullForm]) => {
 })
 
 /**
+ * Common skill aliases and abbreviations
+ */
+export const SKILL_ALIASES: Record<string, string[]> = {
+  tensorflow: ["tf", "tensor flow"],
+  pytorch: ["torch", "py torch"],
+  langchain: ["lang chain"],
+  "hugging face": ["huggingface", "hf"],
+  "vector database": ["vector db", "vectordb"],
+  "natural language processing": ["nlp"],
+  "machine learning": ["ml"],
+  "artificial intelligence": ["ai"],
+  "deep learning": ["dl"],
+  "convolutional neural network": ["cnn"],
+  "recurrent neural network": ["rnn"],
+  "long short-term memory": ["lstm"],
+  "generative adversarial network": ["gan"],
+  "reinforcement learning": ["rl"],
+  "continuous integration/continuous deployment": ["ci/cd", "cicd"],
+  "amazon web services": ["aws"],
+  "google cloud platform": ["gcp"],
+  "microsoft azure": ["azure"],
+  javascript: ["js"],
+  typescript: ["ts"],
+  python: ["py"],
+  "retrieval augmented generation": ["rag"],
+  "large language model": ["llm"],
+  "agentic workflow": ["auto-agent", "autonomous agent", "agent workflow"],
+  "multi-agent coordination": ["multi-agent system", "multi-agent", "multiagent"],
+  reasoning: ["chain of thought", "cot", "logical reasoning"],
+  "synthetic data training": ["synthetic data generation", "synthetic training data"],
+  "launched ai products to production": ["deployed ai", "ai in production", "production ai"],
+}
+
+/**
  * Resolves an abbreviation to its full form if available
  * @param skill The skill abbreviation to resolve
  * @returns The full form of the skill or the original skill if no mapping exists
@@ -128,60 +162,16 @@ export function getAbbreviation(fullSkillName: string): string {
  * @returns The normalized skill name
  */
 export function normalizeSkillName(skill: string): string {
-  // Remove extra whitespace and convert to lowercase for comparison
-  const trimmedSkill = skill.trim()
-  const lowerSkill = trimmedSkill.toLowerCase()
+  const normalized = skill.toLowerCase().trim()
 
-  // Handle special cases and common variations
-  switch (lowerSkill) {
-    case "javascript":
-    case "js":
-      return "JavaScript"
-    case "typescript":
-    case "ts":
-      return "TypeScript"
-    case "react":
-    case "reactjs":
-    case "react.js":
-      return "React"
-    case "node":
-    case "nodejs":
-    case "node.js":
-      return "Node.js"
-    case "vue":
-    case "vuejs":
-    case "vue.js":
-      return "Vue.js"
-    case "angular":
-    case "angularjs":
-      return "Angular"
-    case "aws":
-      return "Amazon Web Services"
-    case "gcp":
-      return "Google Cloud Platform"
-    case "azure":
-      return "Microsoft Azure"
-    case "ml":
-      return "Machine Learning"
-    case "ai":
-      return "Artificial Intelligence"
-    case "nlp":
-      return "Natural Language Processing"
-    case "cv":
-      return "Computer Vision"
-    case "ci/cd":
-    case "cicd":
-      return "CI/CD"
-    case "devops":
-      return "DevOps"
-    default:
-      // If it's an abbreviation we know, resolve it
-      if (abbreviationMap[trimmedSkill]) {
-        return abbreviationMap[trimmedSkill]
-      }
-      // Otherwise return with proper capitalization
-      return trimmedSkill.charAt(0).toUpperCase() + trimmedSkill.slice(1)
+  // Check if this is an alias and return the primary term
+  for (const [primary, aliases] of Object.entries(SKILL_ALIASES)) {
+    if (aliases.includes(normalized)) {
+      return primary
+    }
   }
+
+  return normalized
 }
 
 /**
@@ -225,18 +215,42 @@ export function areSkillsEquivalent(skillA: string, skillB: string): boolean {
  * @param listB Second list of skills
  * @returns Array of matching skills
  */
-export function findMatchingSkills(listA: string[], listB: string[]): string[] {
-  const matches: string[] = []
+export function findMatchingSkills(sourceSkills: string[], targetSkills: string[]): string[] {
+  const normalizedSourceSkills = sourceSkills.map((skill) => normalizeSkillName(skill))
+  const normalizedTargetSkills = targetSkills.map((skill) => normalizeSkillName(skill))
 
-  listA.forEach((skillA) => {
-    listB.forEach((skillB) => {
-      if (areSkillsEquivalent(skillA, skillB)) {
-        // Use the normalized version of skillA for consistency
-        matches.push(normalizeSkillName(skillA))
+  const matchedSkills: string[] = []
+
+  for (const targetSkill of normalizedTargetSkills) {
+    // Check for direct match
+    if (normalizedSourceSkills.includes(targetSkill)) {
+      matchedSkills.push(targetSkill)
+      continue
+    }
+
+    // Check for alias matches
+    let aliasMatch = false
+    for (const [primary, aliases] of Object.entries(SKILL_ALIASES)) {
+      // If target skill is a primary term, check if source has any of its aliases
+      if (targetSkill === primary) {
+        for (const alias of aliases) {
+          if (normalizedSourceSkills.includes(alias)) {
+            matchedSkills.push(primary)
+            aliasMatch = true
+            break
+          }
+        }
       }
-    })
-  })
 
-  // Remove duplicates
-  return [...new Set(matches)]
+      // If target skill is an alias, check if source has the primary term
+      if (aliases.includes(targetSkill) && normalizedSourceSkills.includes(primary)) {
+        matchedSkills.push(targetSkill)
+        aliasMatch = true
+      }
+
+      if (aliasMatch) break
+    }
+  }
+
+  return matchedSkills
 }

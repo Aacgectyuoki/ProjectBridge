@@ -47,16 +47,49 @@ export default function AnalyzePage() {
           console.error("Error parsing job data from localStorage:", error)
         }
 
+        // Check if we already have a cached analysis result
+        const cachedAnalysis = localStorage.getItem("skillGapAnalysis")
+        if (cachedAnalysis) {
+          try {
+            const parsedAnalysis = JSON.parse(cachedAnalysis)
+            setAnalysisData(parsedAnalysis)
+            setIsLoading(false)
+            return // Exit early if we have cached data
+          } catch (error) {
+            console.warn("Failed to parse cached analysis", error)
+            // Continue with analysis if parsing fails
+          }
+        }
+
         if (resumeData && jobData) {
-          // Use our new analysis function
-          const gapAnalysis = await analyzeSkillsGapFromResults(resumeData, jobData)
-          setAnalysisData(gapAnalysis)
+          try {
+            // Use our new analysis function
+            const gapAnalysis = await analyzeSkillsGapFromResults(resumeData, jobData)
+
+            // Cache the result
+            try {
+              localStorage.setItem("skillGapAnalysis", JSON.stringify(gapAnalysis))
+            } catch (e) {
+              console.warn("Failed to cache analysis result", e)
+            }
+
+            setAnalysisData(gapAnalysis)
+          } catch (error) {
+            console.error("Error performing skills gap analysis:", error)
+            toast({
+              title: "Analysis Error",
+              description: "There was a problem analyzing your skills gap. Using fallback data.",
+              variant: "destructive",
+            })
+            // Fallback to mock data
+            setAnalysisData(mockAnalysisData)
+          }
         } else {
           // Fallback to mock data
           setAnalysisData(mockAnalysisData)
         }
       } catch (error) {
-        console.error("Error performing skills gap analysis:", error)
+        console.error("Error in analysis process:", error)
         toast({
           title: "Analysis Error",
           description: "There was a problem analyzing your skills gap. Please try again.",

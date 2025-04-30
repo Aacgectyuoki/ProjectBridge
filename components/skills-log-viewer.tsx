@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button"
 import { Trash2, RefreshCw } from "lucide-react"
 import { SkillsLogger } from "@/utils/skills-logger"
 
-export function SkillsLogViewer() {
+interface SkillsLogViewerProps {
+  inline?: boolean
+}
+
+export function SkillsLogViewer({ inline = false }: SkillsLogViewerProps) {
   const [logs, setLogs] = useState([])
   const [isVisible, setIsVisible] = useState(false)
 
@@ -15,9 +19,21 @@ export function SkillsLogViewer() {
   const [showAllSkills, setShowAllSkills] = useState(false)
   const allSkills = SkillsLogger.getAllDetectedSkills()
 
+  // Add a safety check for logs
+  const processLogs = (logs) => {
+    return logs.map((log) => {
+      // Ensure all logs have the expected properties
+      return {
+        ...log,
+        technicalSkills: log.technicalSkills || log.requiredSkills || [],
+        softSkills: log.softSkills || log.preferredSkills || [],
+      }
+    })
+  }
+
   const loadLogs = () => {
     const skillsLogs = SkillsLogger.getSkillsLogs()
-    setLogs(skillsLogs)
+    setLogs(processLogs(skillsLogs))
   }
 
   useEffect(() => {
@@ -29,7 +45,7 @@ export function SkillsLogViewer() {
     setLogs([])
   }
 
-  if (!isVisible) {
+  if (!isVisible && !inline) {
     return (
       <div className="fixed bottom-4 right-4">
         <Button variant="outline" size="sm" className="bg-white shadow-md" onClick={() => setIsVisible(true)}>
@@ -40,14 +56,20 @@ export function SkillsLogViewer() {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 w-96 max-h-[80vh] overflow-auto bg-white shadow-xl rounded-lg border z-50">
+    <div
+      className={
+        inline ? "" : "fixed bottom-4 right-4 w-96 max-h-[80vh] overflow-auto bg-white shadow-xl rounded-lg border z-50"
+      }
+    >
       <Card>
         <CardHeader className="pb-2">
           <div className="flex justify-between items-center">
             <CardTitle className="text-lg">Skills Analysis Log</CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => setIsVisible(false)}>
-              ×
-            </Button>
+            {!inline && (
+              <Button variant="ghost" size="sm" onClick={() => setIsVisible(false)}>
+                ×
+              </Button>
+            )}
           </div>
           <CardDescription>Record of detected skills from resume analysis</CardDescription>
         </CardHeader>

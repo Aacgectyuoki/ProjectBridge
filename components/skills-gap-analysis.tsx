@@ -5,6 +5,9 @@ import { CheckCircle, XCircle, AlertTriangle, Lightbulb, Clock, ArrowRight } fro
 import { SkillMatchDisplay } from "@/components/skill-match-display"
 import type { SkillGapAnalysisResult } from "@/app/actions/analyze-skills-gap"
 
+// Add the import for the new component at the top of the file
+import { SkillGapProjectSuggestions } from "@/components/skill-gap-project-suggestions"
+
 interface SkillsGapAnalysisProps {
   analysis: SkillGapAnalysisResult
 }
@@ -89,8 +92,24 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
                 </h3>
                 <div className="space-y-2">
                   {analysis.missingSkills.map((skill, index) => (
-                    <div key={index} className="flex justify-between items-center text-sm p-2 bg-red-50 rounded">
-                      <span className="font-medium">{skill.name}</span>
+                    <div
+                      key={index}
+                      className={`flex justify-between items-center text-sm p-2 rounded ${
+                        skill.priority === "High"
+                          ? "bg-red-100 border border-red-200"
+                          : skill.priority === "Medium"
+                            ? "bg-orange-50 border border-orange-200"
+                            : "bg-red-50"
+                      }`}
+                    >
+                      <span className={`font-medium ${skill.priority === "High" ? "font-bold" : ""}`}>
+                        {skill.name}
+                        {skill.name.toLowerCase() === "hugging face" && (
+                          <span className="ml-2 text-xs bg-red-200 text-red-800 px-2 py-0.5 rounded-full">
+                            Critical Gap
+                          </span>
+                        )}
+                      </span>
                       <Badge className={`${getPriorityColor(skill.priority)}`}>{skill.priority}</Badge>
                     </div>
                   ))}
@@ -206,6 +225,9 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
           </Card>
         ))}
       </div>
+
+      {/* Project Suggestions for Critical Skill Gaps */}
+      <SkillGapProjectSuggestions missingSkills={analysis.missingSkills} />
     </div>
   )
 }

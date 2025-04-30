@@ -10,12 +10,14 @@ import { extractSkills } from "@/app/actions/extract-skills"
 import { useToast } from "@/hooks/use-toast"
 import { SkillsLogger } from "@/utils/skills-logger"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
 
 export function JobDescriptionInput({ onSubmit }) {
   const [jobDescription, setJobDescription] = useState("")
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState("")
   const { toast } = useToast()
+  const [showSkillsLog, setShowSkillsLog] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -27,12 +29,22 @@ export function JobDescriptionInput({ onSubmit }) {
 
       try {
         setIsProcessing(true)
+        const startTime = performance.now()
 
         // Extract skills using our new LLM-based extractor
         let extractedSkills
         try {
           extractedSkills = await extractSkills(jobDescription, "job")
           console.log("Successfully extracted job skills:", extractedSkills)
+
+          // Log the extraction with our enhanced logger
+          const processingTime = performance.now() - startTime
+          EnhancedSkillsLogger.logExtractedSkills(
+            jobDescription,
+            extractedSkills,
+            "job-description-input",
+            Math.round(processingTime),
+          )
         } catch (skillsError) {
           console.error("Error extracting job skills:", skillsError)
           // Continue with default skills
@@ -110,6 +122,7 @@ export function JobDescriptionInput({ onSubmit }) {
           title: "Job description analyzed successfully",
           description: `Identified ${enhancedAnalysis.requiredSkills.length} required skills and ${enhancedAnalysis.responsibilities.length} responsibilities.`,
         })
+        setShowSkillsLog(true)
       } catch (error) {
         setIsProcessing(false)
         console.error("Analysis error:", error)
@@ -119,6 +132,8 @@ export function JobDescriptionInput({ onSubmit }) {
           description: error.message || "Failed to analyze job description. Please try again.",
           variant: "destructive",
         })
+      } finally {
+        setIsProcessing(false)
       }
     }
   }
@@ -149,6 +164,17 @@ export function JobDescriptionInput({ onSubmit }) {
           <Briefcase className="h-4 w-4" />
         </Button>
       </div>
+      {isProcessing ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          className="mt-2 w-full"
+          onClick={() => setShowSkillsLog(!showSkillsLog)}
+        >
+          {showSkillsLog ? "Hide Skills Log" : "Show Skills Log"}
+        </Button>
+      )}
+      {showSkillsLog && <div className="mt-4">Skills Log Viewer component goes here</div>}
     </form>
   )
 }

@@ -15,6 +15,8 @@ import { SkillsSummary } from "@/components/skills-summary"
 import type { ResumeAnalysisResult } from "@/app/actions/analyze-resume"
 import type { JobAnalysisResult } from "@/app/actions/analyze-job-description"
 import { SkillsLogViewer } from "@/components/skills-log-viewer"
+// Add the new DetailedSkillExtractionLog component to the imports
+import { DetailedSkillExtractionLog } from "@/components/detailed-skill-extraction-log"
 
 export default function Dashboard() {
   const [activeStep, setActiveStep] = useState(1)
@@ -27,6 +29,7 @@ export default function Dashboard() {
   const [fileSelected, setFileSelected] = useState(false)
   const [fileUploaded, setFileUploaded] = useState(false)
   const [showSkillsSummary, setShowSkillsSummary] = useState(false)
+  const [showJobSkillsLog, setShowJobSkillsLog] = useState(false)
 
   const handleResumeUpload = (data) => {
     setResumeData(data)
@@ -57,6 +60,7 @@ export default function Dashboard() {
     setJobData(data)
     if (data.analysis) {
       setJobAnalysis(data.analysis)
+      setShowJobSkillsLog(true) // Show skills log after job analysis
     }
     setActiveStep(3)
     setActiveTab("focus")
@@ -205,6 +209,28 @@ export default function Dashboard() {
               </Card>
 
               {jobAnalysis && (
+                <div className="mt-4 flex justify-end">
+                  <Button variant="outline" size="sm" onClick={() => setShowJobSkillsLog(!showJobSkillsLog)}>
+                    {showJobSkillsLog ? "Hide Skills Log" : "Show Skills Log"}
+                  </Button>
+                </div>
+              )}
+
+              {showJobSkillsLog && jobAnalysis && (
+                <div className="mt-4">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Job Skills Log</CardTitle>
+                      <CardDescription>Skills extracted from the job description</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <SkillsLogViewer inline={true} />
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {jobAnalysis && (
                 <div className="mt-8">
                   <JobAnalysisResults analysis={jobAnalysis} />
                 </div>
@@ -243,6 +269,7 @@ export default function Dashboard() {
           </Tabs>
         </div>
         <SkillsLogViewer />
+        <DetailedSkillExtractionLog />
       </main>
     </div>
   )

@@ -12,6 +12,7 @@ import { extractSkills } from "@/app/actions/extract-skills"
 import { useToast } from "@/hooks/use-toast"
 import { SkillsLogger } from "@/utils/skills-logger"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
 
 export function ResumeUpload({ onUpload, onFileSelect }) {
   const [file, setFile] = useState(null)
@@ -128,6 +129,7 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
 
       try {
         setIsAnalyzing(true)
+        const startTime = performance.now()
 
         // Store the resume text for future comparison
         localStorage.setItem("resumeText", resumeText)
@@ -137,6 +139,15 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
         try {
           extractedSkills = await extractSkills(resumeText, "resume")
           console.log("Successfully extracted skills:", extractedSkills)
+
+          // Log the extraction with our enhanced logger
+          const processingTime = performance.now() - startTime
+          EnhancedSkillsLogger.logExtractedSkills(
+            resumeText,
+            extractedSkills,
+            "resume-text-input",
+            Math.round(processingTime),
+          )
         } catch (skillsError) {
           console.error("Error extracting skills:", skillsError)
           // Continue with default skills
