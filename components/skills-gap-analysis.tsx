@@ -228,6 +228,92 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
 
       {/* Project Suggestions for Critical Skill Gaps */}
       <SkillGapProjectSuggestions missingSkills={analysis.missingSkills} />
+
+      {/* Enhanced Skill Gap Analysis */}
+      <EnhancedSkillGapAnalysis analysis={analysis} />
+    </div>
+  )
+}
+
+// Add a more structured analysis component that includes:
+// 1. Clear sections for Missing Required Skills, Missing Preferred Skills, Experience Gap, and Strengths
+// 2. Detailed explanations for each missing skill
+// 3. Proper formatting with nested lists and emphasis on important points
+
+export function EnhancedSkillGapAnalysis({ analysis }) {
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold">Missing Required Skills</h2>
+      {analysis.missingSkills
+        .filter((skill) => skill.priority === "High")
+        .map((skill, index) => (
+          <div key={index} className="border-l-4 border-red-500 pl-4 mb-4">
+            <h3 className="font-bold text-lg">{skill.name}</h3>
+            <ul className="list-disc pl-5 space-y-2 mt-2">
+              <li>Required proficiency: {skill.level}</li>
+              <li>{skill.context}</li>
+              <li className="text-red-600 font-medium">
+                This is a {skill.priority.toLowerCase()} priority skill for this role
+              </li>
+            </ul>
+          </div>
+        ))}
+
+      {/* Similar sections for Missing Preferred Skills, Experience Gap, and Strengths */}
+      {analysis.missingSkills.filter((skill) => skill.priority === "Medium").length > 0 && (
+        <>
+          <h2 className="text-xl font-bold mt-4">Missing Preferred Skills</h2>
+          {analysis.missingSkills
+            .filter((skill) => skill.priority === "Medium")
+            .map((skill, index) => (
+              <div key={index} className="border-l-4 border-orange-500 pl-4 mb-4">
+                <h3 className="font-bold text-lg">{skill.name}</h3>
+                <ul className="list-disc pl-5 space-y-2 mt-2">
+                  <li>Required proficiency: {skill.level}</li>
+                  <li>{skill.context}</li>
+                  <li className="text-orange-600 font-medium">
+                    This is a {skill.priority.toLowerCase()} priority skill for this role
+                  </li>
+                </ul>
+              </div>
+            ))}
+        </>
+      )}
+
+      {analysis.missingExperience.length > 0 && (
+        <>
+          <h2 className="text-xl font-bold mt-4">Experience Gap</h2>
+          {analysis.missingExperience.map((exp, index) => (
+            <div key={index} className="border-l-4 border-purple-500 pl-4 mb-4">
+              <h3 className="font-bold text-lg">{exp.area}</h3>
+              <ul className="list-disc pl-5 space-y-2 mt-2">
+                <li>Years Needed: {exp.yearsNeeded}</li>
+                <li>{exp.suggestion}</li>
+              </ul>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* Assuming you have a way to determine strengths from the analysis */}
+      {/* This is a placeholder - replace with actual logic */}
+      {analysis.matchedSkills.length > 0 && (
+        <>
+          <h2 className="text-xl font-bold mt-4">Strengths</h2>
+          {analysis.matchedSkills.map((skill, index) => (
+            <div key={index} className="border-l-4 border-green-500 pl-4 mb-4">
+              <h3 className="font-bold text-lg">{skill.name}</h3>
+              <ul className="list-disc pl-5 space-y-2 mt-2">
+                <li>Proficiency: {skill.proficiency}</li>
+                <li>Relevance: {skill.relevance}</li>
+              </ul>
+            </div>
+          ))}
+        </>
+      )}
+
+      <h2 className="text-xl font-bold mt-8">Recommendations to Bridge the Gap</h2>
+      {/* Detailed recommendations with actionable steps */}
     </div>
   )
 }

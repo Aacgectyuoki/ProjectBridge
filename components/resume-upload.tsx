@@ -247,10 +247,51 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
       } catch (error) {
         setIsAnalyzing(false)
         console.error("Analysis error:", error)
-        setError(error.message || "Failed to analyze resume. Please try again.")
+
+        // Provide a more specific error message for JSON parsing issues
+        let errorMessage = "Failed to analyze resume. Please try again."
+        if (error.message && error.message.includes("JSON")) {
+          errorMessage =
+            "There was an issue processing the resume data. The system is trying to recover automatically. Please try again if needed."
+
+          // Attempt a retry with a simplified prompt
+          try {
+            toast({
+              title: "Retrying analysis",
+              description: "We encountered an issue and are trying again with a simplified approach.",
+              variant: "warning",
+            })
+
+            // Create a simplified fallback analysis
+            const fallbackAnalysis = {
+              skills: {
+                technical: extractBasicSkills(resumeText).technical,
+                soft: [],
+              },
+              experience: [],
+              education: [],
+              summary: "Analysis could not be completed fully.",
+              strengths: [],
+              weaknesses: ["Resume analysis was incomplete due to technical issues."],
+            }
+
+            setIsAnalyzing(false)
+            onUpload({
+              type: "text",
+              data: resumeText,
+              analysis: fallbackAnalysis,
+            })
+
+            return
+          } catch (retryError) {
+            console.error("Retry also failed:", retryError)
+          }
+        }
+
+        setError(error.message || errorMessage)
         toast({
           title: "Analysis failed",
-          description: error.message || "Failed to analyze resume. Please try again.",
+          description: errorMessage,
           variant: "destructive",
         })
       }

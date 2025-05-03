@@ -17,7 +17,35 @@ export type ExtractedSkillsLog = {
   processingTime?: number // Optional timing information
 }
 
+// Create a standardized logging format
 export class EnhancedSkillsLogger {
+  static logSkillExtraction(data: {
+    source: string
+    technicalSkills: string[]
+    softSkills: string[]
+    timestamp: string
+  }) {
+    console.log(`[SKILL-EXTRACTION] Source: ${data.source}`)
+    console.log(`[SKILL-EXTRACTION] Time: ${new Date().toLocaleTimeString()}`)
+    console.log(`[SKILL-EXTRACTION] Technical Skills: ${JSON.stringify(data.technicalSkills)}`)
+    console.log(`[SKILL-EXTRACTION] Soft Skills: ${JSON.stringify(data.softSkills || [])}`)
+
+    // Store in localStorage with consistent format
+    const logKey = `skill-extraction-log-${data.source}-${data.timestamp}`
+    const logData = {
+      source: data.source,
+      technicalSkills: data.technicalSkills,
+      softSkills: data.softSkills || [],
+      timestamp: data.timestamp,
+    }
+
+    try {
+      localStorage.setItem(logKey, JSON.stringify(logData))
+    } catch (e) {
+      console.error("Failed to store log in localStorage", e)
+    }
+  }
+
   private static readonly STORAGE_KEY = "enhancedSkillsLogs"
   private static readonly MAX_INPUT_LENGTH = 500 // Limit the stored raw input length
 
@@ -106,4 +134,5 @@ export class EnhancedSkillsLogger {
 
     return skillCounts
   }
+  // Add more standardized logging methods
 }
