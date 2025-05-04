@@ -4,6 +4,7 @@ import { generateText } from "ai"
 import { groq } from "@ai-sdk/groq"
 import type { ResumeAnalysisResult } from "./analyze-resume"
 import type { JobAnalysisResult } from "./analyze-job-description"
+import { storeAnalysisData } from "@/utils/analysis-session-manager"
 
 export type ProjectIdea = {
   id: string
@@ -48,6 +49,12 @@ function fixSpecificJsonIssues(text: string): string {
   // Fix the specific issue with the second project (algo-data)
   // Missing "tags" property name before the array
   fixed = fixed.replace(/"additionalNotes": "([^"]+)",\s*\[/g, '"additionalNotes": "$1", "tags": [')
+
+  // Fix missing commas between objects in arrays
+  fixed = fixed.replace(/\}(\s*)\{/g, "},\n{")
+
+  // Fix URLs without proper string escaping
+  fixed = fixed.replace(/"url":\s*([^"].+?)(,|\})/g, '"url": "$1"$2')
 
   return fixed
 }
@@ -239,11 +246,32 @@ export async function generateProjectIdeas(
   roleFocus?: string,
 ): Promise<ProjectIdea[]> {
   try {
-    // Extract skills from resume
-    const resumeSkills = [...(resumeAnalysis.skills?.technical || []), ...(resumeAnalysis.skills?.soft || [])]
+    // Validate input data
+    if (!resumeAnalysis || !jobAnalysis) {
+      console.error("Missing resume or job analysis data:", { resumeAnalysis, jobAnalysis })
+      throw new Error("Missing resume or job data")
+    }
 
-    // Extract required skills from job
-    const jobSkills = [...(jobAnalysis.requiredSkills || []), ...(jobAnalysis.preferredSkills || [])]
+    // Normalize the input data to handle different log structures
+    const resumeSkills = [
+      ...(resumeAnalysis.skills?.technical || []),
+      ...(resumeAnalysis.skills?.soft || []),
+      ...(resumeAnalysis.skills?.tools || []),
+      ...(resumeAnalysis.skills?.frameworks || []),
+      ...(resumeAnalysis.skills?.languages || []),
+      ...(resumeAnalysis.skills?.databases || []),
+      ...(resumeAnalysis.skills?.platforms || []),
+    ]
+
+    // Extract required skills from job, handling different data structures
+    const jobRequiredSkills = jobAnalysis.requiredSkills || []
+    const jobPreferredSkills = jobAnalysis.preferredSkills || []
+
+    // Handle alternative data structures
+    const technicalSkills = (jobAnalysis as any).technicalSkills || []
+    const softSkills = (jobAnalysis as any).softSkills || []
+
+    const jobSkills = [...jobRequiredSkills, ...jobPreferredSkills, ...technicalSkills, ...softSkills].filter(Boolean) // Remove any undefined/null values
 
     // Identify missing skills (skills in job but not in resume)
     const missingSkills = jobSkills.filter(
@@ -263,10 +291,10 @@ export async function generateProjectIdeas(
       ${resumeSkills.join(", ")}
 
       JOB REQUIRED SKILLS:
-      ${jobAnalysis.requiredSkills?.join(", ") || "Not specified"}
+      ${jobRequiredSkills.join(", ") || "Not specified"}
 
       JOB PREFERRED SKILLS:
-      ${jobAnalysis.preferredSkills?.join(", ") || "Not specified"}
+      ${jobPreferredSkills.join(", ") || "Not specified"}
 
       MISSING SKILLS THAT NEED DEVELOPMENT:
       ${missingSkills.join(", ")}
@@ -320,6 +348,9 @@ export async function generateProjectIdeas(
     try {
       const result = safeJSONParse(text)
 
+      // Store the result with session isolation
+      storeAnalysisData("projectIdeas", result)
+
       // Ensure each project has the expected structure
       return result.map((project: any, index: number) => ({
         id: project.id || `project-${index + 1}`,
@@ -343,6 +374,6 @@ export async function generateProjectIdeas(
     }
   } catch (error) {
     console.error("Error generating project ideas:", error)
-    return []
+    throw error // Re-throw to allow proper error handling by the caller
   }
 }

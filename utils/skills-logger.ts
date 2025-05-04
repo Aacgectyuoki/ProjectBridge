@@ -1,3 +1,33 @@
+/**
+ * Utility for logging skill extraction results
+ */
+
+/**
+ * Log extracted skills for analysis and debugging
+ */
+export function logSkillExtraction(sourceText: string, extractionResult: any): void {
+  console.log("Skill extraction completed")
+
+  // Log technical skills if available
+  if (extractionResult?.skills?.technical?.length > 0) {
+    console.log("Technical skills:", extractionResult.skills.technical)
+  }
+
+  // Log soft skills if available
+  if (extractionResult?.skills?.soft?.length > 0) {
+    console.log("Soft skills:", extractionResult.skills.soft)
+  }
+
+  // Log specialized skill categories if available
+  const specializedCategories = ["tools", "frameworks", "languages", "databases", "methodologies", "platforms", "other"]
+
+  specializedCategories.forEach((category) => {
+    if (extractionResult?.skills?.[category]?.length > 0) {
+      console.log(`${category.charAt(0).toUpperCase() + category.slice(1)}:`, extractionResult.skills[category])
+    }
+  })
+}
+
 type SkillsLogData = {
   technicalSkills: string[]
   softSkills: string[]
@@ -5,8 +35,14 @@ type SkillsLogData = {
   source: string
 }
 
-export class SkillsLogger {
-  static logSkills(technicalSkills: string[], softSkills: string[], source = "resume"): void {
+/**
+ * Log skills for analysis
+ */
+export const SkillsLogger = {
+  logSkills: (data: any): void => {
+    console.log("Skills logged:", data)
+  },
+  logSkillsOld: (technicalSkills: string[], softSkills: string[] = [], source = "resume"): void => {
     const logData: SkillsLogData = {
       technicalSkills,
       softSkills,
@@ -36,9 +72,9 @@ export class SkillsLogger {
     } catch (error) {
       console.error("Error saving skills log:", error)
     }
-  }
+  },
 
-  static getSkillsLogs(): SkillsLogData[] {
+  getSkillsLogs(): SkillsLogData[] {
     try {
       const logs = localStorage.getItem("skillsAnalysisLogs")
       return logs ? JSON.parse(logs) : []
@@ -46,14 +82,14 @@ export class SkillsLogger {
       console.error("Error retrieving skills logs:", error)
       return []
     }
-  }
+  },
 
-  static clearLogs(): void {
+  clearLogs(): void {
     localStorage.removeItem("skillsAnalysisLogs")
-  }
+  },
 
   // Add a method to get a complete list of all skills detected
-  static getAllDetectedSkills(): { technical: string[]; soft: string[] } {
+  getAllDetectedSkills(): { technical: string[]; soft: string[] } {
     const logs = this.getSkillsLogs()
 
     // Create sets to avoid duplicates
@@ -85,9 +121,9 @@ export class SkillsLogger {
       technical: Array.from(technicalSkillsSet),
       soft: Array.from(softSkillsSet),
     }
-  }
+  },
 
-  static logRoleFocus(roleFocus: string): void {
+  logRoleFocus(roleFocus: string): void {
     console.group("Role Focus Selection")
     console.log(`Selected Role: ${roleFocus}`)
     console.log(`Time: ${new Date().toLocaleTimeString()}`)
@@ -113,9 +149,9 @@ export class SkillsLogger {
     } catch (error) {
       console.error("Error saving role focus log:", error)
     }
-  }
+  },
 
-  static logJobSkills(requiredSkills: string[], preferredSkills: string[]): void {
+  logJobSkills(requiredSkills: string[], preferredSkills: string[]): void {
     const logData = {
       requiredSkills,
       preferredSkills,
@@ -144,5 +180,5 @@ export class SkillsLogger {
     } catch (error) {
       console.error("Error saving job skills log:", error)
     }
-  }
+  },
 }

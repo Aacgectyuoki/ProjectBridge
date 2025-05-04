@@ -103,32 +103,29 @@ export function repairJSON(text: string): string {
   return json
 }
 
+import { safeParseJSON } from "../json-repair"
+
 /**
- * Safely parses JSON with multiple fallback strategies
+ * Safe JSON parse function that uses our enhanced JSON repair utilities
  */
 export function safeJSONParse(text: string): any {
-  // First, try direct parsing
-  try {
-    return JSON.parse(text)
-  } catch (e) {
-    // If direct parsing fails, try to extract JSON using regex
-    try {
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0])
-      }
-    } catch (extractError) {
-      // Extraction failed, continue to repair
-    }
+  // Handle empty or undefined input
+  if (!text || text.trim() === "") {
+    console.log("Empty input provided to safeJSONParse")
+    return {}
+  }
 
-    // If extraction fails, try to repair the JSON
-    try {
-      const repairedJson = repairJSON(text)
-      return JSON.parse(repairedJson)
-    } catch (repairError) {
-      // If repair fails, return null
-      return null
-    }
+  // Log the first few characters to help diagnose issues
+  console.log("First 10 characters of input to safeJSONParse:", JSON.stringify(text.substring(0, 10)))
+
+  try {
+    // First try direct parsing
+    return JSON.parse(text)
+  } catch (error) {
+    console.error("Initial JSON parse failed in safeJSONParse:", error.message)
+
+    // Use our enhanced safeParseJSON function
+    return safeParseJSON(text, {})
   }
 }
 

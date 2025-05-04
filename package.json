@@ -60,7 +60,10 @@
     "zod": "latest",
     "ai": "latest",
     "@ai-sdk/groq": "latest",
-    "perf_hooks": "latest"
+    "perf_hooks": "latest",
+    "@supabase/supabase-js": "latest",
+    "child_process": "latest",
+    "path": "latest"
   },
   "devDependencies": {
     "@types/node": "^22",

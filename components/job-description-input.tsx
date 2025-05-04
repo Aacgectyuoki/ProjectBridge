@@ -10,6 +10,7 @@ import { extractJobSkillsChain } from "@/app/actions/extract-job-skills-chain"
 import { useToast } from "@/hooks/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { SkillExtractionLogViewer } from "./skill-extraction-log-viewer"
+import { storeCompatibleAnalysisData, getCurrentSessionId } from "@/utils/analysis-session-manager"
 
 export function JobDescriptionInput({ onSubmit }) {
   const [jobDescription, setJobDescription] = useState("")
@@ -104,12 +105,14 @@ export function JobDescriptionInput({ onSubmit }) {
         setIsProcessing(false)
         setProcessingStage("")
 
-        // Store the analysis result in localStorage for later use
+        // Store the analysis result using our enhanced session management
         try {
-          localStorage.setItem("jobAnalysis", JSON.stringify(enhancedAnalysis))
-          localStorage.setItem("extractedJobSkills", JSON.stringify(extractedSkills))
+          storeCompatibleAnalysisData("jobAnalysis", enhancedAnalysis)
+          storeCompatibleAnalysisData("extractedJobSkills", extractedSkills)
+
+          console.log("Stored job analysis in session:", getCurrentSessionId())
         } catch (error) {
-          console.error("Error saving job analysis to localStorage:", error)
+          console.error("Error saving job analysis:", error)
         }
 
         // Log the job description analysis

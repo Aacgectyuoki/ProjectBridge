@@ -35,6 +35,7 @@ export async function performEnhancedSkillAnalysis(
   // Extract skills from resume and job
   const resumeSkills = [
     ...(resumeAnalysis.skills?.technical || []),
+    ...(resumeAnalysis.skills?.soft || []), // Handle optional soft skills
     ...(resumeAnalysis.skills?.tools || []),
     ...(resumeAnalysis.skills?.frameworks || []),
     ...(resumeAnalysis.skills?.languages || []),

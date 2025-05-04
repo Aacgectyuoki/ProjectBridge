@@ -2,7 +2,7 @@ import { z } from "zod"
 
 export const SkillsSchema = z.object({
   technical: z.array(z.string()).default([]),
-  soft: z.array(z.string()).default([]),
+  soft: z.array(z.string()).optional().default([]),
   tools: z.array(z.string()).default([]),
   frameworks: z.array(z.string()).default([]),
   languages: z.array(z.string()).default([]),

@@ -1,23 +1,23 @@
 "use server"
 
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+import { safeParseJSON } from "@/utils/enhanced-json-repair"
 import type { ResumeAnalysisResult } from "./analyze-resume"
 import type { JobAnalysisResult } from "./analyze-job-description"
-import { withRetry } from "@/utils/api-rate-limit-handler"
+import { generateText } from "ai"
+import { groq } from "@ai-sdk/groq"
 
 export type SkillGapAnalysisResult = {
   matchPercentage: number
   missingSkills: {
     name: string
     level: string
-    priority: "High" | "Medium" | "Low"
+    priority: string
     context: string
   }[]
   missingQualifications: {
     description: string
-    importance: "Required" | "Preferred"
-    alternative: string
+    importance: string
+    alternative?: string
   }[]
   missingExperience: {
     area: string
@@ -27,368 +27,277 @@ export type SkillGapAnalysisResult = {
   matchedSkills: {
     name: string
     proficiency: string
-    relevance: "High" | "Medium" | "Low"
+    relevance: string
   }[]
   recommendations: {
-    type: "Project" | "Course" | "Certification" | "Experience"
+    type: string
     description: string
     timeToAcquire: string
-    priority: "High" | "Medium" | "Low"
+    priority: string
   }[]
   summary: string
 }
 
-export async function analyzeSkillsGap(resumeText: string, jobDescription: string): Promise<SkillGapAnalysisResult> {
+// Default empty structure to ensure consistent shape
+const defaultSkillGapAnalysisResult: SkillGapAnalysisResult = {
+  matchPercentage: 0,
+  missingSkills: [],
+  missingQualifications: [],
+  missingExperience: [],
+  matchedSkills: [],
+  recommendations: [],
+  summary: "",
+}
+
+export async function analyzeSkillsGapFromResults(
+  resumeAnalysis: ResumeAnalysisResult,
+  jobAnalysis: JobAnalysisResult,
+): Promise<SkillGapAnalysisResult> {
   try {
+    console.log(
+      "Using existing session ID:",
+      typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
+    )
+
+    // Check if we already have a cached analysis result
+    const cachedAnalysis =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem(`skillGapAnalysis_${localStorage.getItem("currentAnalysisSession")}`)
+        : null
+
+    if (cachedAnalysis) {
+      console.log(
+        "No skillGapAnalysis data found in session",
+        typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
+      )
+      try {
+        const parsedAnalysis = JSON.parse(cachedAnalysis)
+        return parsedAnalysis
+      } catch (e) {
+        console.error("Failed to parse cached analysis:", e)
+        // Continue with generating a new analysis
+      }
+    } else {
+      console.log(
+        "No skillGapAnalysis data found in session",
+        typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
+      )
+    }
+
+    // Prepare the data for the prompt
+    const resumeSkills = getAllSkills(resumeAnalysis)
+    const jobRequiredSkills = jobAnalysis.requiredSkills || []
+    const jobPreferredSkills = jobAnalysis.preferredSkills || []
+
+    console.log("Required Skills:", JSON.stringify(jobRequiredSkills))
+    console.log("Preferred Skills:", JSON.stringify(jobPreferredSkills))
+    console.log("Extracted Skills:", JSON.stringify(resumeSkills))
+    console.log("Responsibilities:", JSON.stringify(jobAnalysis.responsibilities || []))
+
+    // Prepare the prompt for skill gap analysis
     const prompt = `
-      You are an expert career advisor and skills analyst. Your task is to analyze a resume and a job description, 
-      then identify the gaps between the candidate's qualifications and the job requirements.
+      You are a skilled career advisor with expertise in analyzing skills gaps between a candidate's resume and job requirements.
       
-      # RESUME:
-      ${resumeText}
+      Resume Skills:
+      ${JSON.stringify(resumeSkills, null, 2)}
       
-      # JOB DESCRIPTION:
-      ${jobDescription}
+      Job Required Skills:
+      ${JSON.stringify(jobRequiredSkills, null, 2)}
       
-      Perform a detailed analysis to identify:
-      1. Skills mentioned in the job description that are missing from the resume
-      2. Qualifications required by the job that the candidate doesn't have
-      3. Experience requirements that the candidate doesn't meet
-      4. Skills the candidate has that match the job requirements
-      5. Specific recommendations to bridge the identified gaps
+      Job Preferred Skills:
+      ${JSON.stringify(jobPreferredSkills, null, 2)}
       
-      For each missing skill, determine its priority (High/Medium/Low) based on:
-      - How frequently it's mentioned in the job description
-      - Whether it's listed as required or preferred
-      - Its placement in the job description (skills mentioned early are often more important)
+      Job Responsibilities:
+      ${JSON.stringify(jobAnalysis.responsibilities || [], null, 2)}
       
-      For each recommendation, suggest specific actions the candidate can take to acquire the missing skills or qualifications.
+      Job Qualifications:
+      ${JSON.stringify(jobAnalysis.qualifications || {}, null, 2)}
       
-      Calculate an overall match percentage based on how well the candidate's profile matches the job requirements.
+      Job Experience Requirements:
+      ${JSON.stringify(jobAnalysis.experience || {}, null, 2)}
       
-      Format your response as valid JSON with the following structure exactly:
+      Resume Experience:
+      ${JSON.stringify(resumeAnalysis.experience || [], null, 2)}
+      
+      Resume Education:
+      ${JSON.stringify(resumeAnalysis.education || [], null, 2)}
+      
+      Based on the above information, analyze the skills gap between the candidate's resume and the job requirements.
+      Return a JSON object with the following structure:
       {
-        "matchPercentage": number,
+        "matchPercentage": 75,
         "missingSkills": [
           {
             "name": "Skill Name",
-            "level": "Required proficiency level",
+            "level": "Beginner/Intermediate/Advanced",
             "priority": "High/Medium/Low",
-            "context": "How this skill is used in the job"
+            "context": "Why this skill is important for the role"
           }
         ],
         "missingQualifications": [
           {
-            "description": "Description of the qualification",
+            "description": "Qualification description",
             "importance": "Required/Preferred",
-            "alternative": "Possible alternative qualification the candidate might have"
+            "alternative": "Alternative qualification or experience"
           }
         ],
         "missingExperience": [
           {
             "area": "Experience area",
-            "yearsNeeded": "Years of experience needed",
+            "yearsNeeded": "Years needed",
             "suggestion": "How to gain this experience"
           }
         ],
         "matchedSkills": [
           {
             "name": "Skill Name",
-            "proficiency": "Candidate's proficiency level",
+            "proficiency": "Beginner/Intermediate/Advanced",
             "relevance": "High/Medium/Low"
           }
         ],
         "recommendations": [
           {
-            "type": "Project/Course/Certification/Experience",
-            "description": "Detailed description of the recommendation",
-            "timeToAcquire": "Estimated time to acquire this skill",
+            "type": "Project/Course/Certification",
+            "description": "Detailed description",
+            "timeToAcquire": "Estimated time",
             "priority": "High/Medium/Low"
           }
         ],
-        "summary": "A concise summary of the overall analysis and key recommendations"
+        "summary": "A brief summary of the skills gap analysis"
       }
       
-      Return only the JSON without any additional text or explanation.
+      Ensure your response is ONLY the JSON object, with no additional text before or after.
+      Make sure all property names and string values are properly quoted.
+      Do not use trailing commas.
+      Ensure all arrays and objects are properly closed.
     `
 
-    const { text } = await generateText({
+    // Generate the analysis
+    const { text: responseText } = await generateText({
       model: groq("llama3-70b-8192"),
       prompt,
       temperature: 0.2,
-      maxTokens: 3000,
+      maxTokens: 2048,
     })
 
-    // Parse the JSON response
-    try {
-      // First, try to parse the raw response
-      let result: SkillGapAnalysisResult
+    // Parse the JSON response with our enhanced safe parser
+    const result = safeParseJSON(responseText, defaultSkillGapAnalysisResult)
 
-      try {
-        result = JSON.parse(text) as SkillGapAnalysisResult
-      } catch (parseError) {
-        // If direct parsing fails, try to extract JSON from the text
-        const jsonMatch = text.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          result = JSON.parse(jsonMatch[0]) as SkillGapAnalysisResult
-        } else {
-          throw new Error("Could not extract valid JSON from response")
-        }
-      }
-
-      return result
-    } catch (parseError) {
-      console.error("Error parsing Groq response:", parseError)
-      console.error("Raw response:", text)
-      throw new Error("Failed to parse the analysis result")
+    if (!result) {
+      console.error("Failed to parse AI response as JSON")
+      console.log("Raw response:", responseText)
+      return defaultSkillGapAnalysisResult
     }
+
+    // Ensure the result has the expected structure
+    const validatedResult = ensureValidStructure(result)
+
+    // Store the result in localStorage
+    if (typeof localStorage !== "undefined") {
+      const sessionId = localStorage.getItem("currentAnalysisSession") || "unknown_session"
+      localStorage.setItem(`skillGapAnalysis_${sessionId}`, JSON.stringify(validatedResult))
+      console.log("Stored skillGapAnalysis data in session", sessionId)
+    }
+
+    return validatedResult
   } catch (error) {
     console.error("Error analyzing skills gap:", error)
-    throw error
+    return defaultSkillGapAnalysisResult
   }
 }
 
-// Alternative method that takes the already analyzed results
-export async function analyzeSkillsGapFromResults(
-  resumeAnalysis: ResumeAnalysisResult,
-  jobAnalysis: JobAnalysisResult,
-): Promise<SkillGapAnalysisResult> {
-  // Check if we have a cached result
-  const cacheKey = `skillGap_${JSON.stringify(resumeAnalysis.skills)}_${JSON.stringify(jobAnalysis.requiredSkills)}`
-
+/**
+ * Ensure the result has the expected structure
+ */
+function ensureValidStructure(result: any): SkillGapAnalysisResult {
   try {
-    // Try to get from cache first (if in browser environment)
-    if (typeof window !== "undefined") {
-      const cachedResult = localStorage.getItem(cacheKey)
-      if (cachedResult) {
-        try {
-          return JSON.parse(cachedResult) as SkillGapAnalysisResult
-        } catch (e) {
-          console.warn("Failed to parse cached result", e)
-          // Continue with API call if parsing fails
-        }
-      }
+    // Start with the default structure
+    const validatedResult: SkillGapAnalysisResult = {
+      ...defaultSkillGapAnalysisResult,
     }
 
-    // If no cache or not in browser, try the API with fallback models
-    const models = [
-      "llama3-70b-8192", // First choice
-      "llama3-8b-8192", // Fallback option 1 (smaller model)
-      "mixtral-8x7b-32768", // Fallback option 2
-    ]
-
-    let lastError: Error | null = null
-
-    // Try each model in sequence
-    for (const model of models) {
-      try {
-        const prompt = `
-          You are an expert career advisor and skills analyst. Your task is to analyze the parsed data from a resume and a job description, 
-          then identify the gaps between the candidate's qualifications and the job requirements.
-          
-          # RESUME ANALYSIS:
-          ${JSON.stringify(resumeAnalysis, null, 2)}
-          
-          # JOB DESCRIPTION ANALYSIS:
-          ${JSON.stringify(jobAnalysis, null, 2)}
-          
-          Perform a detailed analysis to identify:
-          1. Skills mentioned in the job description that are missing from the resume
-          2. Qualifications required by the job that the candidate doesn't have
-          3. Experience requirements that the candidate doesn't meet
-          4. Skills the candidate has that match the job requirements
-          5. Specific recommendations to bridge the identified gaps
-          
-          For each missing skill, determine its priority (High/Medium/Low) based on:
-          - How frequently it's mentioned in the job description
-          - Whether it's listed as required or preferred
-          - Its placement in the job description (skills mentioned early are often more important)
-          
-          For each recommendation, suggest specific actions the candidate can take to acquire the missing skills or qualifications.
-          
-          Calculate an overall match percentage based on how well the candidate's profile matches the job requirements.
-          
-          Format your response as valid JSON with the following structure exactly:
-          {
-            "matchPercentage": number,
-            "missingSkills": [
-              {
-                "name": "Skill Name",
-                "level": "Required proficiency level",
-                "priority": "High/Medium/Low",
-                "context": "How this skill is used in the job"
-              }
-            ],
-            "missingQualifications": [
-              {
-                "description": "Description of the qualification",
-                "importance": "Required/Preferred",
-                "alternative": "Possible alternative qualification the candidate might have"
-              }
-            ],
-            "missingExperience": [
-              {
-                "area": "Experience area",
-                "yearsNeeded": "Years of experience needed",
-                "suggestion": "How to gain this experience"
-              }
-            ],
-            "matchedSkills": [
-              {
-                "name": "Skill Name",
-                "proficiency": "Candidate's proficiency level",
-                "relevance": "High/Medium/Low"
-              }
-            ],
-            "recommendations": [
-              {
-                "type": "Project/Course/Certification/Experience",
-                "description": "Detailed description of the recommendation",
-                "timeToAcquire": "Estimated time to acquire this skill",
-                "priority": "High/Medium/Low"
-              }
-            ],
-            "summary": "A concise summary of the overall analysis and key recommendations"
-          }
-          
-          Return only the JSON without any additional text or explanation.
-        `
-
-        // Reduce token usage for smaller models
-        const maxTokens = model === "llama3-70b-8192" ? 3000 : 2000
-
-        const { text } = await withRetry(
-          () =>
-            generateText({
-              model: groq(model),
-              prompt,
-              temperature: 0.2,
-              maxTokens,
-            }),
-          {
-            maxRetries: 3,
-            initialDelayMs: 2000,
-            maxDelayMs: 15000,
-            backoffFactor: 1.5,
-          },
-        )
-
-        // Parse the JSON response
-        let result: SkillGapAnalysisResult
-
-        try {
-          result = JSON.parse(text) as SkillGapAnalysisResult
-        } catch (parseError) {
-          // If direct parsing fails, try to extract JSON from the text
-          const jsonMatch = text.match(/\{[\s\S]*\}/)
-          if (jsonMatch) {
-            result = JSON.parse(jsonMatch[0]) as SkillGapAnalysisResult
-          } else {
-            throw new Error("Could not extract valid JSON from response")
-          }
-        }
-
-        // Cache the successful result (if in browser environment)
-        if (typeof window !== "undefined") {
-          try {
-            localStorage.setItem(cacheKey, JSON.stringify(result))
-          } catch (e) {
-            console.warn("Failed to cache result", e)
-          }
-        }
-
-        return result
-      } catch (error) {
-        console.warn(`Error with model ${model}:`, error)
-        lastError = error as Error
-        // Continue to next model
-      }
+    // Validate and repair each field
+    if (typeof result.matchPercentage === "number") {
+      validatedResult.matchPercentage = result.matchPercentage
     }
 
-    // If we've exhausted all models, fall back to a rule-based approach
-    console.warn("All AI models failed, using rule-based fallback")
-    return generateFallbackAnalysis(resumeAnalysis, jobAnalysis)
+    if (Array.isArray(result.missingSkills)) {
+      validatedResult.missingSkills = result.missingSkills.map((skill: any) => ({
+        name: typeof skill.name === "string" ? skill.name : "",
+        level: typeof skill.level === "string" ? skill.level : "",
+        priority: typeof skill.priority === "string" ? skill.priority : "",
+        context: typeof skill.context === "string" ? skill.context : "",
+      }))
+    }
+
+    if (Array.isArray(result.missingQualifications)) {
+      validatedResult.missingQualifications = result.missingQualifications.map((qual: any) => ({
+        description: typeof qual.description === "string" ? qual.description : "",
+        importance: typeof qual.importance === "string" ? qual.importance : "",
+        alternative: typeof qual.alternative === "string" ? qual.alternative : undefined,
+      }))
+    }
+
+    if (Array.isArray(result.missingExperience)) {
+      validatedResult.missingExperience = result.missingExperience.map((exp: any) => ({
+        area: typeof exp.area === "string" ? exp.area : "",
+        yearsNeeded: typeof exp.yearsNeeded === "string" ? exp.yearsNeeded : "",
+        suggestion: typeof exp.suggestion === "string" ? exp.suggestion : "",
+      }))
+    }
+
+    if (Array.isArray(result.matchedSkills)) {
+      validatedResult.matchedSkills = result.matchedSkills.map((skill: any) => ({
+        name: typeof skill.name === "string" ? skill.name : "",
+        proficiency: typeof skill.proficiency === "string" ? skill.proficiency : "",
+        relevance: typeof skill.relevance === "string" ? skill.relevance : "",
+      }))
+    }
+
+    if (Array.isArray(result.recommendations)) {
+      validatedResult.recommendations = result.recommendations.map((rec: any) => ({
+        type: typeof rec.type === "string" ? rec.type : "",
+        description: typeof rec.description === "string" ? rec.description : "",
+        timeToAcquire: typeof rec.timeToAcquire === "string" ? rec.timeToAcquire : "",
+        priority: typeof rec.priority === "string" ? rec.priority : "",
+      }))
+    }
+
+    if (typeof result.summary === "string") {
+      validatedResult.summary = result.summary
+    }
+
+    return validatedResult
   } catch (error) {
-    console.error("Error analyzing skills gap:", error)
-    throw error
+    console.error("Error validating result structure:", error)
+    return defaultSkillGapAnalysisResult
   }
 }
 
-// Add this new function for fallback analysis
-function generateFallbackAnalysis(
-  resumeAnalysis: ResumeAnalysisResult,
-  jobAnalysis: JobAnalysisResult,
-): SkillGapAnalysisResult {
-  // Extract skills from resume
-  const resumeSkills = [
-    ...(resumeAnalysis.skills?.technical || []),
-    ...(resumeAnalysis.skills?.soft || []),
-    ...(resumeAnalysis.skills?.tools || []),
-    ...(resumeAnalysis.skills?.frameworks || []),
-    ...(resumeAnalysis.skills?.languages || []),
-    ...(resumeAnalysis.skills?.databases || []),
-    ...(resumeAnalysis.skills?.methodologies || []),
-    ...(resumeAnalysis.skills?.platforms || []),
-  ].map((skill) => skill.toLowerCase())
-
-  // Extract required skills from job
-  const requiredSkills = (jobAnalysis.requiredSkills || []).map((skill) => skill.toLowerCase())
-  const preferredSkills = (jobAnalysis.preferredSkills || []).map((skill) => skill.toLowerCase())
-
-  // Find missing required skills
-  const missingRequiredSkills = requiredSkills.filter(
-    (skill) => !resumeSkills.some((resumeSkill) => resumeSkill.includes(skill) || skill.includes(resumeSkill)),
-  )
-
-  // Find missing preferred skills
-  const missingPreferredSkills = preferredSkills.filter(
-    (skill) => !resumeSkills.some((resumeSkill) => resumeSkill.includes(skill) || skill.includes(resumeSkill)),
-  )
-
-  // Find matched skills
-  const matchedSkills = [...requiredSkills, ...preferredSkills].filter((skill) =>
-    resumeSkills.some((resumeSkill) => resumeSkill.includes(skill) || skill.includes(resumeSkill)),
-  )
-
-  // Calculate match percentage
-  const totalJobSkills = requiredSkills.length + preferredSkills.length
-  const matchPercentage = totalJobSkills > 0 ? Math.round((matchedSkills.length / totalJobSkills) * 100) : 0
-
-  // Generate missing skills array
-  const missingSkills = [
-    ...missingRequiredSkills.map((skill) => ({
-      name: skill,
-      level: "Intermediate to Advanced",
-      priority: "High" as const,
-      context: `This skill is listed as required in the job description.`,
-    })),
-    ...missingPreferredSkills.map((skill) => ({
-      name: skill,
-      level: "Beginner to Intermediate",
-      priority: "Medium" as const,
-      context: `This skill is listed as preferred in the job description.`,
-    })),
-  ]
-
-  // Generate recommendations based on missing skills
-  const recommendations = missingSkills.slice(0, 5).map((skill) => ({
-    type: Math.random() > 0.5 ? "Project" : ("Course" as const),
-    description: `Learn ${skill.name} through ${Math.random() > 0.5 ? "practical projects" : "structured courses"}`,
-    timeToAcquire: `${Math.floor(Math.random() * 3) + 1}-${Math.floor(Math.random() * 3) + 3} months`,
-    priority: skill.priority,
-  }))
-
-  return {
-    matchPercentage,
-    missingSkills,
-    missingQualifications: [],
-    missingExperience: [],
-    matchedSkills: matchedSkills.map((skill) => ({
-      name: skill,
-      proficiency: "Demonstrated",
-      relevance: "High" as const,
-    })),
-    recommendations,
-    summary: `You match approximately ${matchPercentage}% of the job requirements. Focus on acquiring the missing required skills first, particularly ${missingRequiredSkills.slice(0, 3).join(", ")}.`,
+/**
+ * Extract all skills from resume analysis
+ */
+function getAllSkills(resumeAnalysis: ResumeAnalysisResult): Record<string, string[]> {
+  const skills = {
+    technical: [],
+    soft: [],
+    tools: [],
+    frameworks: [],
+    languages: [],
+    databases: [],
+    methodologies: [],
+    platforms: [],
+    other: [],
   }
+
+  // Copy skills from resume analysis
+  if (resumeAnalysis.skills) {
+    Object.keys(resumeAnalysis.skills).forEach((key) => {
+      if (key in skills && Array.isArray(resumeAnalysis.skills[key])) {
+        skills[key] = [...resumeAnalysis.skills[key]]
+      }
+    })
+  }
+
+  return skills
 }

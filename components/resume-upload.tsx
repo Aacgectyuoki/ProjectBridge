@@ -1,5 +1,11 @@
 "use client"
 
+import { AlertDescription } from "@/components/ui/alert"
+
+import { AlertTitle } from "@/components/ui/alert"
+
+import { Alert } from "@/components/ui/alert"
+
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,8 +17,8 @@ import { analyzeResume } from "@/app/actions/analyze-resume"
 import { extractSkills } from "@/app/actions/extract-skills"
 import { useToast } from "@/hooks/use-toast"
 import { SkillsLogger } from "@/utils/skills-logger"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
+import { storeAnalysisData, getCurrentSessionId } from "@/utils/analysis-session-manager"
 
 export function ResumeUpload({ onUpload, onFileSelect }) {
   const [file, setFile] = useState(null)
@@ -22,6 +28,7 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [error, setError] = useState("")
   const { toast } = useToast()
+  const sessionId = getCurrentSessionId()
 
   // Add this function near the top of the component, after the useState declarations
   const validateInput = (text: string) => {
@@ -117,7 +124,87 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
     return skills.join(", ")
   }
 
-  const handleTextAnalysis = async (e) => {
+  // Function to store analysis data consistently
+  const storeAnalysisResults = (analysisData, extractedSkills, sourceText) => {
+    try {
+      console.log(`Storing resume analysis in session ${sessionId}`)
+
+      // Store in session storage with session ID
+      storeAnalysisData("resumeAnalysis", analysisData)
+      storeAnalysisData("extractedResumeSkills", extractedSkills)
+
+      // Also store the raw text for reference
+      if (sourceText) {
+        storeAnalysisData("resumeText", sourceText)
+      }
+
+      // Log for debugging
+      console.log("Resume analysis stored successfully")
+      console.log("Technical skills:", analysisData.skills.technical)
+      if (analysisData.skills.soft) {
+        console.log("Soft skills:", analysisData.skills.soft)
+      }
+
+      return true
+    } catch (error) {
+      console.error("Error storing resume analysis:", error)
+      return false
+    }
+  }
+
+  // Function to extract basic skills (fallback)
+  const extractBasicSkills = (text) => {
+    const technicalSkills = []
+    const softSkills = []
+
+    // Basic keyword matching (expand as needed)
+    const technicalKeywords = ["JavaScript", "React", "Node.js", "HTML", "CSS", "Python", "Java"]
+    const softKeywords = ["Communication", "Teamwork", "Leadership", "Problem-solving"]
+
+    technicalKeywords.forEach((keyword) => {
+      if (text.toLowerCase().includes(keyword.toLowerCase())) {
+        technicalSkills.push(keyword)
+      }
+    })
+
+    softKeywords.forEach((keyword) => {
+      if (text.toLowerCase().includes(keyword.toLowerCase())) {
+        softSkills.push(keyword)
+      }
+    })
+
+    return {
+      technical: technicalSkills,
+      soft: softSkills,
+    }
+  }
+
+  const handleTextAnalysis = async (text) => {
+    setIsAnalyzing(true)
+    try {
+      const result = await analyzeResume(text)
+      if (result) {
+        // setAnalysisResults(result); // This line was removed because setAnalysisResults is not defined
+      } else {
+        toast({
+          title: "Analysis Error",
+          description: "Failed to analyze resume. Please try again.",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error("Resume analysis error:", error)
+      toast({
+        title: "Analysis Error",
+        description: "An unexpected error occurred during analysis.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  const handleTextAnalysisOld = async (e) => {
     e.preventDefault()
     setError("")
 
@@ -130,9 +217,6 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
       try {
         setIsAnalyzing(true)
         const startTime = performance.now()
-
-        // Store the resume text for future comparison
-        localStorage.setItem("resumeText", resumeText)
 
         // First, extract skills using our new LLM-based extractor
         let extractedSkills
@@ -171,29 +255,69 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
         }
 
         // Then, analyze the resume for other information
-        const analysisResult = await analyzeResume(resumeText)
+        let analysisResult
+        try {
+          analysisResult = await analyzeResume(resumeText)
+
+          // Validate the result has the expected structure
+          if (!analysisResult || !analysisResult.skills) {
+            console.error("Invalid analysis result structure:", analysisResult)
+            throw new Error("Invalid analysis result structure")
+          }
+        } catch (analysisError) {
+          console.error("Error in resume analysis:", analysisError)
+
+          // Create a fallback analysis result
+          analysisResult = {
+            skills: {
+              technical: extractedSkills.technical || [],
+              soft: extractedSkills.soft || [],
+            },
+            experience: [],
+            education: [],
+            summary: "Analysis could not be completed fully.",
+            strengths: [],
+            weaknesses: ["Resume analysis was incomplete due to technical issues."],
+          }
+
+          toast({
+            title: "Analysis partially completed",
+            description: "We encountered some issues analyzing your resume, but extracted the skills successfully.",
+            variant: "warning",
+          })
+        }
 
         // Combine the results - use the more detailed skill extraction
         const enhancedAnalysis = {
           ...analysisResult,
           skills: {
             technical: [
-              ...analysisResult.skills.technical,
-              ...extractedSkills.technical,
-              ...extractedSkills.frameworks,
-              ...extractedSkills.languages,
-              ...extractedSkills.databases,
-              ...extractedSkills.tools,
-              ...extractedSkills.platforms,
+              ...(analysisResult.skills.technical || []),
+              ...(extractedSkills.technical || []),
+              ...(extractedSkills.frameworks || []),
+              ...(extractedSkills.languages || []),
+              ...(extractedSkills.databases || []),
+              ...(extractedSkills.tools || []),
+              ...(extractedSkills.platforms || []),
             ].filter(
               (skill, index, self) => skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
             ),
-            soft: [...analysisResult.skills.soft, ...extractedSkills.soft, ...extractedSkills.methodologies].filter(
-              (skill, index, self) => skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-            ),
+            soft: analysisResult.skills.soft
+              ? [
+                  ...(analysisResult.skills.soft || []),
+                  ...(extractedSkills.soft || []),
+                  ...(extractedSkills.methodologies || []),
+                ].filter(
+                  (skill, index, self) =>
+                    skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
+                )
+              : [],
           },
           extractedSkills, // Add the full extracted skills data
         }
+
+        // Store the analysis result using our session management
+        storeAnalysisResults(enhancedAnalysis, extractedSkills, resumeText)
 
         setIsAnalyzing(false)
         onUpload({
@@ -201,19 +325,6 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
           data: resumeText,
           analysis: enhancedAnalysis,
         })
-
-        // Store the analysis result in localStorage for later use
-        try {
-          localStorage.setItem("resumeAnalysis", JSON.stringify(enhancedAnalysis))
-          localStorage.setItem("extractedResumeSkills", JSON.stringify(extractedSkills))
-
-          // Log detected skills to console for debugging
-          console.log("Extracted skills:", extractedSkills)
-          console.log("Technical skills:", enhancedAnalysis.skills.technical)
-          console.log("Soft skills:", enhancedAnalysis.skills.soft)
-        } catch (error) {
-          console.error("Error saving resume analysis to localStorage:", error)
-        }
 
         // Log the skills
         SkillsLogger.logSkills(
@@ -228,17 +339,22 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
           description: (
             <div className="space-y-1">
               <p>
-                <strong>Technical skills:</strong> {formatSkillsList(enhancedAnalysis.skills.technical.slice(0, 5))}
-                {enhancedAnalysis.skills.technical.length > 5
+                <strong>Technical skills:</strong>{" "}
+                {formatSkillsList((enhancedAnalysis.skills.technical || []).slice(0, 5))}
+                {enhancedAnalysis.skills.technical && enhancedAnalysis.skills.technical.length > 5
                   ? ` and ${enhancedAnalysis.skills.technical.length - 5} more`
                   : ""}
               </p>
+              {enhancedAnalysis.skills.soft && enhancedAnalysis.skills.soft.length > 0 && (
+                <p>
+                  <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
+                  {enhancedAnalysis.skills.soft.length > 3
+                    ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
+                    : ""}
+                </p>
+              )}
               <p>
-                <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
-                {enhancedAnalysis.skills.soft.length > 3 ? ` and ${enhancedAnalysis.skills.soft.length - 3} more` : ""}
-              </p>
-              <p>
-                <strong>Work experiences:</strong> {analysisResult.experience.length}
+                <strong>Work experiences:</strong> {(analysisResult.experience || []).length}
               </p>
             </div>
           ),
@@ -274,6 +390,9 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
               strengths: [],
               weaknesses: ["Resume analysis was incomplete due to technical issues."],
             }
+
+            // Store the fallback analysis
+            storeAnalysisResults(fallbackAnalysis, { technical: fallbackAnalysis.skills.technical }, resumeText)
 
             setIsAnalyzing(false)
             onUpload({
@@ -337,49 +456,75 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
           }
 
           // Analyze the resume for other information
-          const analysisResult = await analyzeResume(text)
+          let analysisResult
+          try {
+            analysisResult = await analyzeResume(text)
+
+            // Validate the result has the expected structure
+            if (!analysisResult || !analysisResult.skills) {
+              console.error("Invalid analysis result structure:", analysisResult)
+              throw new Error("Invalid analysis result structure")
+            }
+          } catch (analysisError) {
+            console.error("Error in resume analysis:", analysisError)
+
+            // Create a fallback analysis result
+            analysisResult = {
+              skills: {
+                technical: extractedSkills.technical || [],
+                soft: extractedSkills.soft || [],
+              },
+              experience: [],
+              education: [],
+              summary: "Analysis could not be completed fully.",
+              strengths: [],
+              weaknesses: ["Resume analysis was incomplete due to technical issues."],
+            }
+
+            toast({
+              title: "Analysis partially completed",
+              description: "We encountered some issues analyzing your resume, but extracted the skills successfully.",
+              variant: "warning",
+            })
+          }
 
           // Combine the results
           const enhancedAnalysis = {
             ...analysisResult,
             skills: {
               technical: [
-                ...analysisResult.skills.technical,
-                ...extractedSkills.technical,
-                ...extractedSkills.frameworks,
-                ...extractedSkills.languages,
-                ...extractedSkills.databases,
-                ...extractedSkills.tools,
-                ...extractedSkills.platforms,
+                ...(analysisResult.skills.technical || []),
+                ...(extractedSkills.technical || []),
+                ...(extractedSkills.frameworks || []),
+                ...(extractedSkills.languages || []),
+                ...(extractedSkills.databases || []),
+                ...(extractedSkills.tools || []),
+                ...(extractedSkills.platforms || []),
               ].filter(
                 (skill, index, self) =>
                   skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
               ),
-              soft: [...analysisResult.skills.soft, ...extractedSkills.soft, ...extractedSkills.methodologies].filter(
-                (skill, index, self) =>
-                  skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-              ),
+              soft: analysisResult.skills.soft
+                ? [
+                    ...(analysisResult.skills.soft || []),
+                    ...(extractedSkills.soft || []),
+                    ...(extractedSkills.methodologies || []),
+                  ].filter(
+                    (skill, index, self) =>
+                      skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
+                  )
+                : [],
             },
             extractedSkills, // Add the full extracted skills data
           }
 
-          // Store the analysis result in localStorage for later use
-          try {
-            localStorage.setItem("resumeAnalysis", JSON.stringify(enhancedAnalysis))
-            localStorage.setItem("extractedResumeSkills", JSON.stringify(extractedSkills))
-
-            // Log detected skills to console for debugging
-            console.log("Extracted skills:", extractedSkills)
-            console.log("Technical skills:", enhancedAnalysis.skills.technical)
-            console.log("Soft skills:", enhancedAnalysis.skills.soft)
-          } catch (error) {
-            console.error("Error saving resume analysis to localStorage:", error)
-          }
+          // Store the analysis result using our session management
+          storeAnalysisResults(enhancedAnalysis, extractedSkills, text)
 
           SkillsLogger.logSkills(
             enhancedAnalysis.skills.technical || [],
             enhancedAnalysis.skills.soft || [],
-            "resume-file",
+            `resume-file-${file.type}`,
           )
 
           setIsUploading(false)
@@ -399,19 +544,22 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
             description: (
               <div className="space-y-1">
                 <p>
-                  <strong>Technical skills:</strong> {formatSkillsList(enhancedAnalysis.skills.technical.slice(0, 5))}
-                  {enhancedAnalysis.skills.technical.length > 5
+                  <strong>Technical skills:</strong>{" "}
+                  {formatSkillsList((enhancedAnalysis.skills.technical || []).slice(0, 5))}
+                  {enhancedAnalysis.skills.technical && enhancedAnalysis.skills.technical.length > 5
                     ? ` and ${enhancedAnalysis.skills.technical.length - 5} more`
                     : ""}
                 </p>
+                {enhancedAnalysis.skills.soft && enhancedAnalysis.skills.soft.length > 0 && (
+                  <p>
+                    <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
+                    {enhancedAnalysis.skills.soft.length > 3
+                      ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
+                      : ""}
+                  </p>
+                )}
                 <p>
-                  <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
-                  {enhancedAnalysis.skills.soft.length > 3
-                    ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
-                    : ""}
-                </p>
-                <p>
-                  <strong>Work experiences:</strong> {analysisResult.experience.length}
+                  <strong>Work experiences:</strong> {(analysisResult.experience || []).length}
                 </p>
               </div>
             ),
@@ -493,48 +641,71 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
               }
 
               // Analyze the resume for other information
-              const analysisResult = await analyzeResume(mockResumeText)
+              let analysisResult
+              try {
+                analysisResult = await analyzeResume(mockResumeText)
+
+                // Validate the result has the expected structure
+                if (!analysisResult || !analysisResult.skills) {
+                  console.error("Invalid analysis result structure:", analysisResult)
+                  throw new Error("Invalid analysis result structure")
+                }
+              } catch (analysisError) {
+                console.error("Error in resume analysis:", analysisError)
+
+                // Create a fallback analysis result
+                analysisResult = {
+                  skills: {
+                    technical: extractedSkills.technical || [],
+                    soft: extractedSkills.soft || [],
+                  },
+                  experience: [],
+                  education: [],
+                  summary: "Analysis could not be completed fully.",
+                  strengths: [],
+                  weaknesses: ["Resume analysis was incomplete due to technical issues."],
+                }
+
+                toast({
+                  title: "Analysis partially completed",
+                  description:
+                    "We encountered some issues analyzing your resume, but extracted the skills successfully.",
+                  variant: "warning",
+                })
+              }
 
               // Combine the results
               const enhancedAnalysis = {
                 ...analysisResult,
                 skills: {
                   technical: [
-                    ...analysisResult.skills.technical,
-                    ...extractedSkills.technical,
-                    ...extractedSkills.frameworks,
-                    ...extractedSkills.languages,
-                    ...extractedSkills.databases,
-                    ...extractedSkills.tools,
-                    ...extractedSkills.platforms,
+                    ...(analysisResult.skills.technical || []),
+                    ...(extractedSkills.technical || []),
+                    ...(extractedSkills.frameworks || []),
+                    ...(extractedSkills.languages || []),
+                    ...(extractedSkills.databases || []),
+                    ...(extractedSkills.tools || []),
+                    ...(extractedSkills.platforms || []),
                   ].filter(
                     (skill, index, self) =>
                       skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
                   ),
-                  soft: [
-                    ...analysisResult.skills.soft,
-                    ...extractedSkills.soft,
-                    ...extractedSkills.methodologies,
-                  ].filter(
-                    (skill, index, self) =>
-                      skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-                  ),
+                  soft: analysisResult.skills.soft
+                    ? [
+                        ...(analysisResult.skills.soft || []),
+                        ...(extractedSkills.soft || []),
+                        ...(extractedSkills.methodologies || []),
+                      ].filter(
+                        (skill, index, self) =>
+                          skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
+                      )
+                    : [],
                 },
                 extractedSkills, // Add the full extracted skills data
               }
 
-              // Store the analysis result in localStorage for later use
-              try {
-                localStorage.setItem("resumeAnalysis", JSON.stringify(enhancedAnalysis))
-                localStorage.setItem("extractedResumeSkills", JSON.stringify(extractedSkills))
-
-                // Log detected skills to console for debugging
-                console.log("Extracted skills from file upload:", extractedSkills)
-                console.log("Technical skills from file upload:", enhancedAnalysis.skills.technical)
-                console.log("Soft skills from file upload:", enhancedAnalysis.skills.soft)
-              } catch (error) {
-                console.error("Error saving resume analysis to localStorage:", error)
-              }
+              // Store the analysis result using our session management
+              storeAnalysisResults(enhancedAnalysis, extractedSkills, mockResumeText)
 
               SkillsLogger.logSkills(
                 enhancedAnalysis.skills.technical || [],
@@ -560,19 +731,21 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
                   <div className="space-y-1">
                     <p>
                       <strong>Technical skills:</strong>{" "}
-                      {formatSkillsList(enhancedAnalysis.skills.technical.slice(0, 5))}
-                      {enhancedAnalysis.skills.technical.length > 5
+                      {formatSkillsList((enhancedAnalysis.skills.technical || []).slice(0, 5))}
+                      {enhancedAnalysis.skills.technical && enhancedAnalysis.skills.technical.length > 5
                         ? ` and ${enhancedAnalysis.skills.technical.length - 5} more`
                         : ""}
                     </p>
+                    {enhancedAnalysis.skills.soft && enhancedAnalysis.skills.soft.length > 0 && (
+                      <p>
+                        <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
+                        {enhancedAnalysis.skills.soft.length > 3
+                          ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
+                          : ""}
+                      </p>
+                    )}
                     <p>
-                      <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
-                      {enhancedAnalysis.skills.soft.length > 3
-                        ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
-                        : ""}
-                    </p>
-                    <p>
-                      <strong>Work experiences:</strong> {analysisResult.experience.length}
+                      <strong>Work experiences:</strong> {(analysisResult.experience || []).length}
                     </p>
                   </div>
                 ),
@@ -606,138 +779,86 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
       } catch (error) {
         setIsUploading(false)
         console.error("Analysis error:", error)
-        setError(error.message || "Failed to analyze resume. Please try again.")
-        toast({
-          title: "Analysis failed",
-          description: error.message || "Failed to analyze resume. Please try again.",
-          variant: "destructive",
-        })
+        setError(error.message || "Failed to analyze resume. Please")
       }
-    }
-  }
-
-  // We can modify the existing component to better handle arbitrary inputs
-  // For example, adding more robust text processing:
-
-  const processResumeText = async (text: string) => {
-    try {
-      // Normalize text to handle various formats
-      const normalizedText = normalizeTextInput(text)
-
-      // Extract skills with fallback mechanisms
-      let extractedSkills
-      try {
-        extractedSkills = await extractSkills(normalizedText, "resume")
-      } catch (error) {
-        // Fallback to simpler extraction if advanced fails
-        extractedSkills = extractBasicSkills(normalizedText)
-        console.error("Using fallback skill extraction:", error)
-      }
-
-      // Continue with analysis...
-    } catch (error) {
-      // Handle errors gracefully
-    }
-  }
-
-  // Helper functions for text processing and skill extraction
-  const normalizeTextInput = (text: string) => {
-    // Implement text normalization logic here
-    // Remove extra spaces, line breaks, special characters, etc.
-    return text.replace(/\s+/g, " ").trim()
-  }
-
-  const extractBasicSkills = (text: string) => {
-    // Implement basic skill extraction logic here
-    // Use regular expressions or simple keyword matching
-    const skills = text.match(/\b(JavaScript|React|Node\.js|HTML|CSS)\b/gi) || []
-    return {
-      technical: skills,
-      soft: [],
-      tools: [],
-      frameworks: [],
-      languages: [],
-      databases: [],
-      methodologies: [],
-      platforms: [],
-      other: [],
     }
   }
 
   return (
-    <Tabs defaultValue="file" className="w-full">
-      <TabsList className="grid w-full grid-cols-3">
-        <TabsTrigger value="file">Upload Resume</TabsTrigger>
-        <TabsTrigger value="text">Paste Resume</TabsTrigger>
-        <TabsTrigger value="linkedin">LinkedIn Profile</TabsTrigger>
-      </TabsList>
-
+    <div className="w-full">
       {error && (
-        <Alert variant="destructive" className="mt-4">
+        <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-
-      <TabsContent value="file" className="space-y-4">
-        <div className="grid w-full max-w-sm items-center gap-1.5">
-          <Label htmlFor="resume">Upload your resume (PDF, DOCX, TXT)</Label>
-          <div className="flex items-center gap-2">
-            <Input id="resume" type="file" accept=".pdf,.docx,.txt" onChange={handleFileChange} className="flex-1" />
-          </div>
-          {file && <p className="text-sm text-gray-500">Selected file: {file.name}</p>}
-        </div>
-        <div className="flex justify-center">
-          <Button onClick={handleFileUpload} disabled={!file || isUploading} className="gap-1.5">
-            {isUploading ? "Analyzing..." : "Upload Resume"}
-            <Upload className="h-4 w-4" />
-          </Button>
-        </div>
-      </TabsContent>
-      <TabsContent value="text" className="space-y-4">
-        <form onSubmit={handleTextAnalysis} className="space-y-4">
-          <div className="grid w-full items-center gap-1.5">
-            <Label htmlFor="resume-text">Paste your resume text</Label>
-            <Textarea
-              id="resume-text"
-              placeholder="Copy and paste your resume content here..."
-              value={resumeText}
-              onChange={(e) => setResumeText(e.target.value)}
-              className="min-h-[300px]"
-            />
-          </div>
-          <div className="flex justify-center">
-            <Button type="submit" disabled={!resumeText || isAnalyzing} className="gap-1.5">
-              {isAnalyzing ? "Analyzing..." : "Analyze Resume"}
-              <FileText className="h-4 w-4" />
-            </Button>
-          </div>
-        </form>
-      </TabsContent>
-      <TabsContent value="linkedin">
-        <form onSubmit={handleLinkedinSubmit} className="space-y-4">
-          <div className="grid w-full max-w-sm items-center gap-1.5">
-            <Label htmlFor="linkedin">LinkedIn Profile URL</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                id="linkedin"
-                type="url"
-                placeholder="https://www.linkedin.com/in/yourprofile"
-                value={linkedinUrl}
-                onChange={(e) => setLinkedinUrl(e.target.value)}
-                className="flex-1"
-              />
+      <Tabs defaultValue="upload" className="w-full">
+        <TabsList>
+          <TabsTrigger value="upload">
+            <Upload className="mr-2 h-4 w-4" />
+            Upload Resume
+          </TabsTrigger>
+          <TabsTrigger value="linkedin">
+            <Linkedin className="mr-2 h-4 w-4" />
+            LinkedIn URL
+          </TabsTrigger>
+          <TabsTrigger value="text">
+            <FileText className="mr-2 h-4 w-4" />
+            Paste Text
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="upload">
+          <form onSubmit={handleFileUpload}>
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="resume">Resume File</Label>
+                <Input id="resume" type="file" onChange={handleFileChange} accept=".pdf,.docx,.txt" />
+              </div>
+              <Button disabled={isUploading} type="submit">
+                {isUploading ? "Uploading..." : "Upload and Analyze"}
+              </Button>
             </div>
-          </div>
-          <div className="flex justify-center">
-            <Button type="submit" disabled={!linkedinUrl || isUploading} className="gap-1.5">
-              {isUploading ? "Processing..." : "Use LinkedIn Profile"}
-              <Linkedin className="h-4 w-4" />
-            </Button>
-          </div>
-        </form>
-      </TabsContent>
-    </Tabs>
+          </form>
+        </TabsContent>
+        <TabsContent value="linkedin">
+          <form onSubmit={handleLinkedinSubmit}>
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="linkedin-url">LinkedIn URL</Label>
+                <Input
+                  id="linkedin-url"
+                  type="url"
+                  placeholder="https://www.linkedin.com/in/johndoe"
+                  value={linkedinUrl}
+                  onChange={(e) => setLinkedinUrl(e.target.value)}
+                />
+              </div>
+              <Button disabled={isUploading} type="submit">
+                {isUploading ? "Analyzing..." : "Analyze LinkedIn Profile"}
+              </Button>
+            </div>
+          </form>
+        </TabsContent>
+        <TabsContent value="text">
+          <form onSubmit={handleTextAnalysisOld}>
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="resume-text">Resume Text</Label>
+                <Textarea
+                  id="resume-text"
+                  placeholder="Paste your resume text here"
+                  value={resumeText}
+                  onChange={(e) => setResumeText(e.target.value)}
+                />
+              </div>
+              <Button disabled={isAnalyzing} type="submit">
+                {isAnalyzing ? "Analyzing..." : "Analyze Text"}
+              </Button>
+            </div>
+          </form>
+        </TabsContent>
+      </Tabs>
+    </div>
   )
 }

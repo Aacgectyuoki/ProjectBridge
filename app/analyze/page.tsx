@@ -5,86 +5,91 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { Code, ArrowRight } from "lucide-react"
+import { Code, ArrowRight, FileText, FileCode, AlertCircle } from "lucide-react"
 import { SkillsGapAnalysis } from "@/components/skills-gap-analysis"
 import { generateProjectIdeas } from "@/app/actions/generate-project-ideas"
 import { analyzeSkillsGapFromResults } from "@/app/actions/analyze-skills-gap"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import type { SkillGapAnalysisResult } from "@/app/actions/analyze-skills-gap"
+import {
+  getCompatibleAnalysisData,
+  storeCompatibleAnalysisData,
+  getCurrentSessionId,
+} from "@/utils/analysis-session-manager"
 
 export default function AnalyzePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isGeneratingProjects, setIsGeneratingProjects] = useState(false)
   const [analysisData, setAnalysisData] = useState<SkillGapAnalysisResult | null>(null)
+  const [missingData, setMissingData] = useState<{ resume: boolean; job: boolean }>({ resume: false, job: false })
+  const [error, setError] = useState<string | null>(null)
   const router = useRouter()
   const { toast } = useToast()
+  const [sessionInitialized, setSessionInitialized] = useState(false)
 
   useEffect(() => {
+    // Only run this once to prevent multiple session creations
+    if (sessionInitialized) return
+
     const fetchAnalysis = async () => {
       setIsLoading(true)
+      setError(null)
+
+      // Get the current session ID without creating a new one
+      const sessionId = getCurrentSessionId()
+      console.log("Using session ID:", sessionId)
 
       try {
-        // Try to get data from localStorage
-        let resumeData = null
-        let jobData = null
+        // Try to get data using our enhanced compatible data retrieval
+        const resumeData = getCompatibleAnalysisData("resumeAnalysis", null)
+        const jobData = getCompatibleAnalysisData("jobAnalysis", null)
 
-        try {
-          const resumeDataStr = localStorage.getItem("resumeAnalysis")
-          if (resumeDataStr) {
-            resumeData = JSON.parse(resumeDataStr)
-          }
-        } catch (error) {
-          console.error("Error parsing resume data from localStorage:", error)
-        }
+        // Check if we're missing data
+        const isMissingResume = !resumeData
+        const isMissingJob = !jobData
 
-        try {
-          const jobDataStr = localStorage.getItem("jobAnalysis")
-          if (jobDataStr) {
-            jobData = JSON.parse(jobDataStr)
-          }
-        } catch (error) {
-          console.error("Error parsing job data from localStorage:", error)
+        if (isMissingResume || isMissingJob) {
+          console.log("Missing data detected:", { resume: isMissingResume, job: isMissingJob })
+          setMissingData({
+            resume: isMissingResume,
+            job: isMissingJob,
+          })
+          setIsLoading(false)
+          return // Exit early if data is missing
         }
 
         // Check if we already have a cached analysis result
-        const cachedAnalysis = localStorage.getItem("skillGapAnalysis")
+        const cachedAnalysis = getCompatibleAnalysisData("skillGapAnalysis", null)
         if (cachedAnalysis) {
-          try {
-            const parsedAnalysis = JSON.parse(cachedAnalysis)
-            setAnalysisData(parsedAnalysis)
-            setIsLoading(false)
-            return // Exit early if we have cached data
-          } catch (error) {
-            console.warn("Failed to parse cached analysis", error)
-            // Continue with analysis if parsing fails
-          }
+          console.log("Using cached skill gap analysis")
+          setAnalysisData(cachedAnalysis)
+          setIsLoading(false)
+          return // Exit early if we have cached data
         }
 
-        if (resumeData && jobData) {
-          try {
-            // Use our new analysis function
-            const gapAnalysis = await analyzeSkillsGapFromResults(resumeData, jobData)
+        // Perform the analysis
+        try {
+          console.log("Performing new skills gap analysis")
+          // Use our analysis function
+          const gapAnalysis = await analyzeSkillsGapFromResults(resumeData, jobData)
 
-            // Cache the result
-            try {
-              localStorage.setItem("skillGapAnalysis", JSON.stringify(gapAnalysis))
-            } catch (e) {
-              console.warn("Failed to cache analysis result", e)
-            }
-
-            setAnalysisData(gapAnalysis)
-          } catch (error) {
-            console.error("Error performing skills gap analysis:", error)
-            toast({
-              title: "Analysis Error",
-              description: "There was a problem analyzing your skills gap. Using fallback data.",
-              variant: "destructive",
-            })
-            // Fallback to mock data
-            setAnalysisData(mockAnalysisData)
+          if (!gapAnalysis) {
+            throw new Error("Failed to generate skills gap analysis")
           }
-        } else {
+
+          // Cache the result using our enhanced compatible storage
+          storeCompatibleAnalysisData("skillGapAnalysis", gapAnalysis)
+
+          setAnalysisData(gapAnalysis)
+        } catch (error) {
+          console.error("Error performing skills gap analysis:", error)
+          toast({
+            title: "Analysis Error",
+            description: "There was a problem analyzing your skills gap. Using fallback data.",
+            variant: "destructive",
+          })
+          setError("Failed to analyze skills gap. Using fallback data.")
           // Fallback to mock data
           setAnalysisData(mockAnalysisData)
         }
@@ -95,6 +100,7 @@ export default function AnalyzePage() {
           description: "There was a problem analyzing your skills gap. Please try again.",
           variant: "destructive",
         })
+        setError("An unexpected error occurred. Please try again.")
         // Fallback to mock data
         setAnalysisData(mockAnalysisData)
       } finally {
@@ -103,7 +109,8 @@ export default function AnalyzePage() {
     }
 
     fetchAnalysis()
-  }, [toast])
+    setSessionInitialized(true)
+  }, [toast, sessionInitialized])
 
   const handleGenerateProjects = async () => {
     if (!analysisData) return
@@ -111,38 +118,16 @@ export default function AnalyzePage() {
     try {
       setIsGeneratingProjects(true)
 
-      // Get the resume and job data from localStorage
-      let resumeData = null
-      let jobData = null
-
-      try {
-        const resumeDataStr = localStorage.getItem("resumeAnalysis")
-        if (resumeDataStr) {
-          resumeData = JSON.parse(resumeDataStr)
-        }
-      } catch (error) {
-        console.error("Error parsing resume data from localStorage:", error)
-      }
-
-      try {
-        const jobDataStr = localStorage.getItem("jobAnalysis")
-        if (jobDataStr) {
-          jobData = JSON.parse(jobDataStr)
-        }
-      } catch (error) {
-        console.error("Error parsing job data from localStorage:", error)
-      }
+      // Get the resume and job data using our enhanced compatible data retrieval
+      const resumeData = getCompatibleAnalysisData("resumeAnalysis", null)
+      const jobData = getCompatibleAnalysisData("jobAnalysis", null)
 
       if (resumeData && jobData) {
         const projectIdeas = await generateProjectIdeas(resumeData, jobData)
 
         if (projectIdeas && projectIdeas.length > 0) {
-          // Save project ideas to localStorage
-          try {
-            localStorage.setItem("projectIdeas", JSON.stringify(projectIdeas))
-          } catch (error) {
-            console.error("Error saving project ideas to localStorage:", error)
-          }
+          // Save project ideas using our enhanced compatible storage
+          storeCompatibleAnalysisData("projectIdeas", projectIdeas)
 
           toast({
             title: "Project ideas generated",
@@ -166,6 +151,53 @@ export default function AnalyzePage() {
       })
     } finally {
       setIsGeneratingProjects(false)
+    }
+  }
+
+  // Function to handle starting over
+  const handleStartOver = () => {
+    router.push("/")
+  }
+
+  // Function to retry analysis
+  const handleRetryAnalysis = async () => {
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const resumeData = getCompatibleAnalysisData("resumeAnalysis", null)
+      const jobData = getCompatibleAnalysisData("jobAnalysis", null)
+
+      if (resumeData && jobData) {
+        // Clear existing analysis
+        localStorage.removeItem(`skillGapAnalysis_${getCurrentSessionId()}`)
+
+        // Perform new analysis
+        const gapAnalysis = await analyzeSkillsGapFromResults(resumeData, jobData)
+
+        // Cache the result
+        storeCompatibleAnalysisData("skillGapAnalysis", gapAnalysis)
+
+        setAnalysisData(gapAnalysis)
+
+        toast({
+          title: "Analysis Complete",
+          description: "Successfully re-analyzed your skills gap.",
+        })
+      } else {
+        throw new Error("Missing resume or job data")
+      }
+    } catch (error) {
+      console.error("Error retrying analysis:", error)
+      toast({
+        title: "Analysis Error",
+        description: "Failed to re-analyze your skills gap. Using fallback data.",
+        variant: "destructive",
+      })
+      setError("Failed to analyze skills gap. Using fallback data.")
+      setAnalysisData(mockAnalysisData)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -197,6 +229,81 @@ export default function AnalyzePage() {
                 <div className="space-y-4">
                   <Progress value={45} className="h-2" />
                   <p className="text-sm text-gray-500">This may take a moment</p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : missingData.resume || missingData.job ? (
+            <Card className="mb-8">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 text-amber-500" />
+                  Missing Data
+                </CardTitle>
+                <CardDescription>
+                  {missingData.resume && missingData.job
+                    ? "Both resume and job description are missing."
+                    : missingData.resume
+                      ? "Resume data is missing."
+                      : "Job description data is missing."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  <p>
+                    To perform a skills gap analysis, we need both your resume and a job description. Please upload the
+                    missing information to continue.
+                  </p>
+
+                  <div className="flex flex-col gap-4">
+                    {missingData.resume && (
+                      <Link href="/" className="w-full">
+                        <Button className="w-full flex items-center gap-2">
+                          <FileText className="h-4 w-4" />
+                          Upload Resume
+                        </Button>
+                      </Link>
+                    )}
+
+                    {missingData.job && (
+                      <Link href="/" className="w-full">
+                        <Button className="w-full flex items-center gap-2">
+                          <FileCode className="h-4 w-4" />
+                          Add Job Description
+                        </Button>
+                      </Link>
+                    )}
+
+                    <Button variant="outline" onClick={handleStartOver} className="w-full">
+                      Start Over
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : error ? (
+            <Card className="mb-8">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 text-red-500" />
+                  Analysis Error
+                </CardTitle>
+                <CardDescription>{error}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  <p>
+                    We encountered an error while analyzing your skills gap. You can try again or continue with the
+                    fallback data.
+                  </p>
+
+                  <div className="flex flex-col gap-4">
+                    <Button onClick={handleRetryAnalysis} className="w-full">
+                      Retry Analysis
+                    </Button>
+                    <Button variant="outline" onClick={handleStartOver} className="w-full">
+                      Start Over
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
