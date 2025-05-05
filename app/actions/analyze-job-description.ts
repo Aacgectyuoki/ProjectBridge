@@ -4,7 +4,8 @@ import { generateText } from "ai"
 import { groq } from "@ai-sdk/groq"
 import { SkillsLogger } from "@/utils/skills-logger"
 // Update the import to use the enhanced JSON repair utility
-import { safeParseJSON } from "@/utils/enhanced-json-repair"
+import { safeParseJSON, extractJsonFromText } from "@/utils/enhanced-json-repair"
+import { withRetry, isRateLimitError } from "@/utils/api-rate-limit-handler"
 
 export type JobAnalysisResult = {
   title: string
@@ -161,8 +162,68 @@ function extractSkillsFromText(text: string): { requiredSkills: string[]; prefer
   return { requiredSkills, preferredSkills }
 }
 
+/**
+ * Try different models in sequence until one works
+ */
+async function tryModelsInSequence(
+  prompt: string,
+  system: string,
+  apiKey: string,
+  models = ["llama3-8b-8192", "mixtral-8x7b-32768", "llama3-70b-8192"],
+): Promise<string> {
+  let lastError: Error | null = null
+
+  for (const model of models) {
+    try {
+      console.log(`Trying model: ${model}`)
+
+      const text = await withRetry(
+        async () => {
+          const response = await generateText({
+            model: groq(model, { apiKey }),
+            prompt,
+            temperature: 0.2,
+            maxTokens: 1500, // Reduced from 2048 to stay under rate limits
+            system,
+          })
+          return response.text
+        },
+        {
+          maxRetries: 3,
+          initialDelayMs: 3000,
+          maxDelayMs: 15000,
+        },
+      )
+
+      console.log(`Successfully used model: ${model}`)
+      return text
+    } catch (error) {
+      console.warn(`Error with model ${model}:`, error)
+      lastError = error instanceof Error ? error : new Error(String(error))
+
+      // If it's not a rate limit error, try the next model
+      // If it is a rate limit error, the withRetry function already tried with backoff
+      if (!isRateLimitError(error)) {
+        continue
+      }
+    }
+  }
+
+  // If all models failed, throw the last error
+  throw lastError || new Error("All models failed")
+}
+
 export async function analyzeJobDescription(jobDescriptionText: string): Promise<JobAnalysisResult> {
   try {
+    // Get the API key from environment variables
+    const GROQ_API_KEY = process.env.GROQ_API_KEY
+
+    // Check if API key is available
+    if (!GROQ_API_KEY) {
+      console.error("GROQ_API_KEY is not defined in environment variables")
+      throw new Error("Groq API key is missing. Please check your environment variables.")
+    }
+
     const prompt = `
       Analyze the following job description and extract key information in a structured format.
       
@@ -184,6 +245,10 @@ export async function analyzeJobDescription(jobDescriptionText: string): Promise
       12. Benefits (if available)
       13. A brief summary of the job
       14. Top 10 keywords with their frequency in the job description
+      
+      CRITICAL INSTRUCTION: Your response MUST be valid JSON only. Do NOT include any explanatory text before or after the JSON.
+      Do NOT include phrases like "Here is the JSON" or "The extracted information is".
+      Your response must start with "{" and end with "}".
       
       Format your response as valid JSON with the following structure exactly:
       {
@@ -218,14 +283,30 @@ export async function analyzeJobDescription(jobDescriptionText: string): Promise
       Do not use trailing commas after the last item in arrays or objects.
     `
 
-    const { text } = await generateText({
-      model: groq("llama3-70b-8192"),
-      prompt,
-      temperature: 0.2,
-      maxTokens: 2048,
-    })
+    const system =
+      "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'."
+
+    // Try different models in sequence
+    const text = await tryModelsInSequence(prompt, system, GROQ_API_KEY, [
+      "llama3-8b-8192",
+      "mixtral-8x7b-32768",
+      "llama3-70b-8192",
+    ])
 
     console.log("Raw LLM response:", text.substring(0, 100) + "...")
+
+    // First, try to extract JSON from text that might contain explanatory content
+    const extractedJson = extractJsonFromText(text)
+    if (extractedJson) {
+      console.log("Successfully extracted JSON from response")
+
+      // Store the result in localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("jobAnalysis", JSON.stringify(extractedJson))
+      }
+
+      return ensureValidStructure(extractedJson)
+    }
 
     // Try to parse the JSON response using our enhanced safe parser
     try {
@@ -257,18 +338,15 @@ export async function analyzeJobDescription(jobDescriptionText: string): Promise
 
       try {
         // Try with our repair function
-        const repairedJSON = safeParseJSON(text)
-        console.log("Repaired JSON:", repairedJSON.substring(0, 100) + "...")
-
-        const result = JSON.parse(repairedJSON)
+        const parsedJSON = safeParseJSON(text, defaultJobAnalysisResult)
         console.log("Repaired JSON parsing succeeded")
 
         // Store the result in localStorage
         if (typeof window !== "undefined") {
-          localStorage.setItem("jobAnalysis", JSON.stringify(result))
+          localStorage.setItem("jobAnalysis", JSON.stringify(parsedJSON))
         }
 
-        return ensureValidStructure(result)
+        return ensureValidStructure(parsedJSON)
       } catch (repairError) {
         console.error("JSON repair failed:", repairError.message)
 
@@ -293,7 +371,19 @@ export async function analyzeJobDescription(jobDescriptionText: string): Promise
     }
   } catch (error) {
     console.error("Error analyzing job description:", error)
-    return defaultJobAnalysisResult
+
+    // Fall back to keyword extraction
+    console.log("Falling back to keyword extraction due to error")
+    const extractedSkills = extractSkillsFromText(jobDescriptionText)
+
+    const fallbackResult = {
+      ...defaultJobAnalysisResult,
+      requiredSkills: extractedSkills.requiredSkills,
+      preferredSkills: extractedSkills.preferredSkills,
+      summary: "Failed to analyze job description. Basic skills extracted.",
+    }
+
+    return fallbackResult
   }
 }
 

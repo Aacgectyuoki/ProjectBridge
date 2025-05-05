@@ -8,7 +8,8 @@ import { jobSkillExtractionPrompt } from "@/utils/ai-chain/prompts/skill-extract
 import { SkillsSchema, type ExtractedSkills } from "@/utils/ai-chain/schemas/skill-extraction-schema"
 import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
 import { SkillsLogger } from "@/utils/skills-logger"
-import { safeParseJSON, repairJSON } from "@/utils/json-repair"
+import { safeParseJSON, extractJsonFromText } from "@/utils/enhanced-json-repair"
+import { withRetry, isRateLimitError } from "@/utils/api-rate-limit-handler"
 
 // Default empty skills structure
 const defaultSkills: ExtractedSkills = {
@@ -23,6 +24,57 @@ const defaultSkills: ExtractedSkills = {
   other: [],
 }
 
+/**
+ * Try different models in sequence until one works
+ */
+async function tryModelsInSequence(
+  prompt: string,
+  system: string,
+  apiKey: string,
+  models = ["llama3-8b-8192", "mixtral-8x7b-32768", "llama3-70b-8192"],
+): Promise<string> {
+  let lastError: Error | null = null
+
+  for (const model of models) {
+    try {
+      console.log(`Trying model: ${model}`)
+
+      const text = await withRetry(
+        async () => {
+          const response = await generateText({
+            model: groq(model, { apiKey }),
+            prompt,
+            temperature: 0.2,
+            maxTokens: 1500, // Reduced from 2048 to stay under rate limits
+            system,
+          })
+          return response.text
+        },
+        {
+          maxRetries: 3,
+          initialDelayMs: 3000,
+          maxDelayMs: 15000,
+        },
+      )
+
+      console.log(`Successfully used model: ${model}`)
+      return text
+    } catch (error) {
+      console.warn(`Error with model ${model}:`, error)
+      lastError = error instanceof Error ? error : new Error(String(error))
+
+      // If it's not a rate limit error, try the next model
+      // If it is a rate limit error, the withRetry function already tried with backoff
+      if (!isRateLimitError(error)) {
+        continue
+      }
+    }
+  }
+
+  // If all models failed, throw the last error
+  throw lastError || new Error("All models failed")
+}
+
 // Function to extract skills from a job description using our LangChain-like approach
 export async function extractJobSkillsChain(jobDescription: string): Promise<{
   skills: ExtractedSkills
@@ -32,14 +84,42 @@ export async function extractJobSkillsChain(jobDescription: string): Promise<{
   const startTime = performance.now()
 
   try {
+    // Get the API key from environment variables
+    const GROQ_API_KEY = process.env.GROQ_API_KEY
+
+    // Check if API key is available
+    if (!GROQ_API_KEY) {
+      console.error("GROQ_API_KEY is not defined in environment variables")
+      throw new Error("Groq API key is missing. Please check your environment variables.")
+    }
+
     // Create our output parser with a fallback creator
     const skillsParser = new OutputParser(SkillsSchema, "job-skills-parser", (text) => {
       console.log("Using fallback creator for job skills parser")
+
+      // First, try to extract JSON from text that might contain explanatory content
+      const extractedJson = extractJsonFromText(text)
+      if (extractedJson) {
+        console.log("Successfully extracted JSON from response")
+
+        // Ensure all skill arrays exist
+        return {
+          technical: Array.isArray(extractedJson.technical) ? extractedJson.technical : [],
+          soft: Array.isArray(extractedJson.soft) ? extractedJson.soft : [],
+          tools: Array.isArray(extractedJson.tools) ? extractedJson.tools : [],
+          frameworks: Array.isArray(extractedJson.frameworks) ? extractedJson.frameworks : [],
+          languages: Array.isArray(extractedJson.languages) ? extractedJson.languages : [],
+          databases: Array.isArray(extractedJson.databases) ? extractedJson.databases : [],
+          methodologies: Array.isArray(extractedJson.methodologies) ? extractedJson.methodologies : [],
+          platforms: Array.isArray(extractedJson.platforms) ? extractedJson.platforms : [],
+          other: Array.isArray(extractedJson.other) ? extractedJson.other : [],
+        }
+      }
+
       // Try to extract skills from the text
       try {
         // First try to repair and parse the JSON
-        const repairedJSON = repairJSON(text)
-        const parsedData = safeParseJSON(repairedJSON, defaultSkills)
+        const parsedData = safeParseJSON(text, defaultSkills)
 
         // Ensure all skill arrays exist
         return {
@@ -69,7 +149,7 @@ export async function extractJobSkillsChain(jobDescription: string): Promise<{
 
     // For now, let's avoid chunking to simplify the process
     // This will help us identify if chunking is causing the freezing issue
-    return await extractJobSkillsDirect(jobDescription, skillsParser)
+    return await extractJobSkillsDirect(jobDescription, skillsParser, GROQ_API_KEY)
   } catch (error) {
     console.error("Error in job skill extraction:", error)
 
@@ -93,6 +173,7 @@ export async function extractJobSkillsChain(jobDescription: string): Promise<{
 async function extractJobSkillsDirect(
   jobDescription: string,
   skillsParser: OutputParser<ExtractedSkills>,
+  apiKey: string,
 ): Promise<{
   skills: ExtractedSkills
   processingTime: number
@@ -106,19 +187,27 @@ async function extractJobSkillsDirect(
   chain.addStep(async (input) => {
     // Format the prompt
     const prompt = jobSkillExtractionPrompt.format({ text: input })
+    const system =
+      "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'."
 
-    // Generate text with the AI model
     try {
-      const { text } = await generateText({
-        model: groq("llama3-70b-8192"),
-        prompt,
-        temperature: 0.2,
-        maxTokens: 2048,
-      })
+      // Try different models in sequence
+      const text = await tryModelsInSequence(prompt, system, apiKey, [
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "llama3-70b-8192",
+      ])
+
+      // First, try to extract JSON from text that might contain explanatory content
+      const extractedJson = extractJsonFromText(text)
+      if (extractedJson) {
+        console.log("Successfully extracted JSON from response")
+        return JSON.stringify(extractedJson)
+      }
 
       return text
     } catch (error) {
-      console.error("Error generating text with Groq:", error)
+      console.error("Error generating text with all models:", error)
       // Return a simple JSON structure that will parse correctly
       return JSON.stringify(defaultSkills)
     }
@@ -136,14 +225,20 @@ async function extractJobSkillsDirect(
       if (typeof text === "string") {
         console.error("First 100 characters of problematic text:", text.substring(0, 100))
 
+        // Try to extract JSON from text that might contain explanatory content
+        const extractedJson = extractJsonFromText(text)
+        if (extractedJson) {
+          console.log("Successfully extracted JSON from problematic text")
+          return extractedJson
+        }
+
         // Try to identify JSON-like structures
         const jsonMatch = text.match(/\{[\s\S]*?\}/)
         if (jsonMatch) {
           console.log("Found JSON-like structure, attempting manual repair")
           try {
-            // Try to repair and parse the JSON structure
-            const repairedJSON = repairJSON(jsonMatch[0])
-            const parsedSkills = safeParseJSON(repairedJSON, defaultSkills)
+            // Try to parse the JSON structure
+            const parsedSkills = safeParseJSON(jsonMatch[0], defaultSkills)
             console.log("Manual repair succeeded")
             return parsedSkills
           } catch (repairError) {
@@ -189,45 +284,6 @@ async function extractJobSkillsDirect(
     skills,
     processingTime,
   }
-}
-
-// Function to merge skills from multiple chunks, removing duplicates
-function mergeSkillResults(results: ExtractedSkills[]): ExtractedSkills {
-  const merged: ExtractedSkills = {
-    technical: [],
-    soft: [],
-    tools: [],
-    frameworks: [],
-    languages: [],
-    databases: [],
-    methodologies: [],
-    platforms: [],
-    other: [],
-  }
-
-  // Helper function to merge arrays without duplicates
-  const mergeArrays = (target: string[], source: string[]) => {
-    for (const item of source) {
-      if (!target.includes(item)) {
-        target.push(item)
-      }
-    }
-  }
-
-  // Merge each category
-  for (const result of results) {
-    mergeArrays(merged.technical, result.technical || [])
-    mergeArrays(merged.soft, result.soft || [])
-    mergeArrays(merged.tools, result.tools || [])
-    mergeArrays(merged.frameworks, result.frameworks || [])
-    mergeArrays(merged.languages, result.languages || [])
-    mergeArrays(merged.databases, result.databases || [])
-    mergeArrays(merged.methodologies, result.methodologies || [])
-    mergeArrays(merged.platforms, result.platforms || [])
-    mergeArrays(merged.other, result.other || [])
-  }
-
-  return merged
 }
 
 // Function to extract skills from text content when JSON parsing fails

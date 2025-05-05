@@ -1,170 +1,515 @@
 /**
- * Enhanced JSON repair utility to handle common JSON parsing errors
+ * Enhanced JSON repair utility
  */
 
 /**
- * Attempts to repair malformed JSON strings
- * @param jsonString The potentially malformed JSON string
- * @returns Repaired JSON string or the original if repair fails
+ * Safely parse JSON with fallback to default value
+ * @param text Text to parse
+ * @param defaultValue Default value to return if parsing fails
+ * @returns Parsed JSON or default value
  */
-export function repairJSON(jsonString: string): string {
+export function safeParseJSON<T>(text: string, defaultValue: T = {} as T): T {
   try {
-    // First try parsing as-is
-    JSON.parse(jsonString)
-    return jsonString
+    // First try direct parsing
+    return JSON.parse(text) as T
   } catch (error) {
-    // If parsing fails, attempt repairs
-    const repaired = attemptJSONRepair(jsonString, error)
-    return repaired
-  }
-}
+    console.error("Initial JSON parse failed:", error.message)
 
-/**
- * Safely parses JSON with repair attempts
- * @param jsonString The JSON string to parse
- * @param defaultValue Optional default value to return if parsing fails
- * @returns Parsed JSON object or defaultValue if parsing fails
- */
-export function safeParseJSON<T>(jsonString: string, defaultValue?: T): any {
-  if (typeof jsonString !== "string") {
-    console.error("safeParseJSON received non-string input:", typeof jsonString)
-    return defaultValue !== undefined ? defaultValue : null
-  }
+    // Log the error context for debugging
+    if (error.message.includes("position")) {
+      const positionMatch = error.message.match(/position (\d+)/)
+      if (positionMatch && positionMatch[1]) {
+        const position = Number.parseInt(positionMatch[1])
+        const start = Math.max(0, position - 50)
+        const end = Math.min(text.length, position + 50)
+        console.error(
+          `JSON error context: "${text.substring(start, position)}[ERROR HERE]${text.substring(position, end)}"`,
+        )
 
-  try {
-    // First, try to extract JSON from text that might contain explanatory content
-    const extractedJson = extractJsonFromText(jsonString)
-    if (extractedJson) {
-      return extractedJson
+        // Try to fix the specific issue at this position
+        try {
+          const fixedText = fixPositionSpecificIssue(text, position, error.message)
+          const parsed = JSON.parse(fixedText)
+          console.log("Successfully fixed JSON with position-specific repair")
+          return parsed as T
+        } catch (positionFixError) {
+          console.error("Position-specific fix failed:", positionFixError.message)
+          // Continue with other repair strategies
+        }
+      }
     }
 
-    // If no JSON was extracted, try to parse the original string
-    return JSON.parse(jsonString)
-  } catch (originalError) {
-    console.error("Initial JSON parse failed:", originalError.message)
-
-    // Log a snippet of the problematic JSON for debugging
-    console.error("First 100 characters:", jsonString.substring(0, 100) + "...")
-
+    // If direct parsing fails, try to repair the JSON
     try {
-      // Attempt to repair and parse
-      const repairedJSON = repairJSON(jsonString)
-      try {
-        return JSON.parse(repairedJSON)
-      } catch (repairError) {
-        console.error("JSON repair failed:", repairError.message)
-      }
+      // First, sanitize control characters
+      const sanitized = sanitizeControlCharacters(text)
 
-      // Try more aggressive repairs
-      const aggressivelyRepairedJSON = aggressiveJSONRepair(jsonString)
-      if (typeof aggressivelyRepairedJSON !== "string") {
-        console.error("aggressiveJSONRepair returned non-string:", typeof aggressivelyRepairedJSON)
-        throw new Error("Repair function returned non-string value")
-      }
-      try {
-        return JSON.parse(aggressivelyRepairedJSON)
-      } catch (aggressiveRepairError) {
-        console.error("Aggressive JSON repair failed:", aggressiveRepairError.message)
-      }
+      // Apply multi-stage repair process
+      const repaired = multiStageJSONRepair(sanitized)
 
-      // Last resort: try to extract valid JSON subset
-      const extractedJSON = extractValidJSONSubset(jsonString)
+      // Validate the repaired JSON before returning
       try {
-        return JSON.parse(extractedJSON)
-      } catch (extractError) {
-        console.error("JSON extraction failed:", extractError.message)
-      }
+        const parsed = JSON.parse(repaired)
+        console.log("Successfully repaired JSON with standard repair")
+        return parsed as T
+      } catch (validationError) {
+        console.error("Final JSON validation failed:", validationError.message)
 
-      // If all repair attempts fail, return the default value
-      return defaultValue !== undefined ? defaultValue : null
-    } catch (error) {
-      console.error("All JSON repair attempts failed:", error)
-      return defaultValue !== undefined ? defaultValue : null
+        // Try more aggressive repair if standard repair fails
+        try {
+          const aggressivelyRepaired = aggressiveJSONRepair(sanitized)
+          const parsed = JSON.parse(aggressivelyRepaired)
+          console.log("Successfully repaired JSON with aggressive repair")
+          return parsed as T
+        } catch (finalError) {
+          console.error("Aggressive JSON repair failed:", finalError.message)
+
+          // Last resort: try to extract a partial valid JSON
+          try {
+            const partialJSON = extractPartialValidJSON(sanitized)
+            if (partialJSON && Object.keys(partialJSON).length > 0) {
+              console.log("Successfully extracted partial valid JSON")
+              return partialJSON as T
+            }
+          } catch (extractError) {
+            console.error("Partial JSON extraction failed:", extractError.message)
+          }
+
+          return defaultValue
+        }
+      }
+    } catch (repairError) {
+      console.error("JSON repair failed:", repairError.message)
+      return defaultValue
     }
   }
 }
 
 /**
- * Attempts to extract JSON from a string that might contain additional text
- * @param text The text that might contain JSON
- * @returns Parsed JSON object or null if parsing fails
+ * Multi-stage JSON repair process
+ * @param text JSON text to repair
+ * @returns Repaired JSON text
  */
-function extractJsonFromText(text: string): any {
-  if (!text) return null
+function multiStageJSONRepair(text: string): string {
+  // Stage 1: Basic cleanup
+  let result = text.trim()
 
+  // Remove any non-JSON content before the first opening brace
+  const firstBrace = result.indexOf("{")
+  if (firstBrace > 0) {
+    result = result.substring(firstBrace)
+  }
+
+  // Remove any non-JSON content after the last closing brace
+  const lastBrace = result.lastIndexOf("}")
+  if (lastBrace !== -1 && lastBrace < result.length - 1) {
+    result = result.substring(0, lastBrace + 1)
+  }
+
+  // Stage 2: Fix array syntax issues
+  result = fixArraySyntaxIssues(result)
+
+  // Stage 3: Fix property name and value issues
+  result = fixPropertyNameAndValueIssues(result)
+
+  // Stage 4: Fix structural issues
+  result = fixStructuralIssues(result)
+
+  return result
+}
+
+/**
+ * Fix array syntax issues
+ * @param json JSON string to fix
+ * @returns Fixed JSON string
+ */
+function fixArraySyntaxIssues(json: string): string {
+  let result = json
+
+  // Fix missing commas between array elements
+  result = result.replace(/"([^"]*)"\s+"([^"]*)"/g, '"$1", "$2"')
+  result = result.replace(/(\d+)\s+"/g, '$1, "')
+  result = result.replace(/"([^"]*)"\s+(\d+)/g, '"$1", $2')
+  result = result.replace(/true\s+"([^"]*)"/g, 'true, "$1"')
+  result = result.replace(/false\s+"([^"]*)"/g, 'false, "$1"')
+  result = result.replace(/"([^"]*)"\s+true/g, '"$1", true')
+  result = result.replace(/"([^"]*)"\s+false/g, '"$1", false')
+  result = result.replace(/null\s+"([^"]*)"/g, 'null, "$1"')
+  result = result.replace(/"([^"]*)"\s+null/g, '"$1", null')
+
+  // Fix arrays that are immediately followed by another property without proper closure
+  result = result.replace(/(\])\s*"([^"]+)":/g, '$1, "$2":')
+
+  // Fix arrays that are immediately followed by another property with a missing comma
+  result = result.replace(/(\])\s+("([^"]+)"):/g, "$1, $2:")
+
+  // Fix specific pattern from error logs: "marketing concepts"]"
+  result = result.replace(/"([^"]+)"\]/g, '"$1"]')
+
+  // Fix specific pattern from error logs: "ering", "selection"]"
+  result = result.replace(/("([^"]+)")\s*,\s*("([^"]+)")\]/g, "$1, $3]")
+
+  // Fix trailing commas in arrays
+  result = result.replace(/,\s*\]/g, "]")
+
+  // Fix unclosed arrays
+  result = fixUnclosedArrays(result)
+
+  return result
+}
+
+/**
+ * Fix property name and value issues
+ * @param json JSON string to fix
+ * @returns Fixed JSON string
+ */
+function fixPropertyNameAndValueIssues(json: string): string {
+  let result = json
+
+  // Fix missing quotes around property names
+  result = result.replace(/(\{|,)\s*([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+
+  // Fix missing quotes around string values
+  result = result.replace(/:\s*([a-zA-Z0-9_]+)(\s*[,}])/g, ':"$1"$2')
+
+  // Fix unquoted property values that should be strings
+  result = result.replace(/:\s*([a-zA-Z][a-zA-Z0-9_\s]*[a-zA-Z0-9_])(\s*[,}])/g, ':"$1"$2')
+
+  // Fix single quotes to double quotes
+  result = result.replace(/'/g, '"')
+
+  // Fix trailing commas in objects
+  result = result.replace(/,\s*\}/g, "}")
+
+  return result
+}
+
+/**
+ * Fix structural issues
+ * @param json JSON string to fix
+ * @returns Fixed JSON string
+ */
+function fixStructuralIssues(json: string): string {
+  let result = json
+
+  // Fix unclosed arrays before new properties
+  result = fixUnclosedArraysBeforeNewProperties(result)
+
+  // Balance brackets and braces
+  result = balanceBracketsAndBraces(result)
+
+  return result
+}
+
+/**
+ * Sanitize control characters in JSON string
+ * @param text JSON string to sanitize
+ * @returns Sanitized JSON string
+ */
+function sanitizeControlCharacters(text: string): string {
+  if (!text) return text
+
+  // Replace control characters with spaces
+  return (
+    text
+      .replace(/[\x00-\x1F\x7F-\x9F]/g, " ")
+      // Replace multiple spaces with a single space
+      .replace(/\s+/g, " ")
+      // Fix common control character issues in JSON
+      .replace(/\\\\/g, "\\\\") // Fix escaped backslashes
+      .replace(/\\"/g, '\\"') // Fix escaped quotes
+      .replace(/\\n/g, "\\n") // Fix escaped newlines
+      .replace(/\\r/g, "\\r") // Fix escaped carriage returns
+      .replace(/\\t/g, "\\t")
+  ) // Fix escaped tabs
+}
+
+/**
+ * Extract JSON from text that might contain explanatory content
+ * @param text Text that might contain JSON
+ * @returns Extracted JSON object or null if not found
+ */
+export function extractJsonFromText(text: string): any | null {
+  // First, check if the text is already valid JSON
   try {
-    // First, try to find JSON-like structure with regex
-    // Look for objects
-    const objectRegex = /(\{[\s\S]*\})/g
-    const objectMatches = text.match(objectRegex)
+    return JSON.parse(text)
+  } catch (e) {
+    // Not valid JSON, continue with extraction
+  }
 
-    if (objectMatches) {
-      for (const match of objectMatches) {
-        try {
-          return JSON.parse(match)
-        } catch (e) {
-          // Continue to the next match
-        }
-      }
-    }
-
-    // Look for arrays
-    const arrayRegex = /(\[[\s\S]*\])/g
-    const arrayMatches = text.match(arrayRegex)
-
-    if (arrayMatches) {
-      for (const match of arrayMatches) {
-        try {
-          return JSON.parse(match)
-        } catch (e) {
-          // Continue to the next match
-        }
-      }
-    }
-
-    // Try to find the first { and last } in the text
-    const firstBrace = text.indexOf("{")
-    const lastBrace = text.lastIndexOf("}")
-
-    if (firstBrace !== -1 && lastBrace !== -1 && firstBrace < lastBrace) {
-      const possibleJson = text.substring(firstBrace, lastBrace + 1)
+  // Look for JSON-like structure with opening and closing braces
+  const jsonMatch = text.match(/\{[\s\S]*?\}/)
+  if (jsonMatch) {
+    try {
+      return JSON.parse(jsonMatch[0])
+    } catch (e) {
+      // Try to repair the extracted JSON
       try {
-        return JSON.parse(possibleJson)
-      } catch (e) {
-        // Try with some repairs
-        try {
-          const repaired = repairJSON(possibleJson)
-          return JSON.parse(repaired)
-        } catch (e2) {
-          // Continue to other strategies
-        }
+        const repaired = multiStageJSONRepair(jsonMatch[0])
+        return JSON.parse(repaired)
+      } catch (repairError) {
+        console.error("Failed to repair extracted JSON:", repairError)
       }
     }
+  }
 
-    // Try to find the first [ and last ] in the text
-    const firstBracket = text.indexOf("[")
-    const lastBracket = text.lastIndexOf("]")
+  return null
+}
 
-    if (firstBracket !== -1 && lastBracket !== -1 && firstBracket < lastBracket) {
-      const possibleJson = text.substring(firstBracket, lastBracket + 1)
+/**
+ * Extract a partial valid JSON object from malformed JSON
+ * @param text Malformed JSON text
+ * @returns Partial valid JSON object or null
+ */
+function extractPartialValidJSON(text: string): any | null {
+  try {
+    // Try to extract key sections of the JSON
+    const result: any = {}
+
+    // Extract skills section if present
+    const skillsMatch = text.match(/"skills"\s*:\s*(\{[^{]*?\})/s)
+    if (skillsMatch && skillsMatch[1]) {
       try {
-        return JSON.parse(possibleJson)
+        const skillsText = fixPropertyNameAndValueIssues(skillsMatch[1])
+        const skills = JSON.parse(skillsText)
+        result.skills = skills
       } catch (e) {
-        // Try with some repairs
-        try {
-          const repaired = repairJSON(possibleJson)
-          return JSON.parse(repaired)
-        } catch (e2) {
-          // Continue to other strategies
-        }
+        // Default skills if parsing fails
+        result.skills = { technical: [], soft: [] }
       }
+    } else {
+      result.skills = { technical: [], soft: [] }
     }
 
-    return null
+    // Extract experience section if present
+    const experienceMatch = text.match(/"experience"\s*:\s*(\[[\s\S]*?\])/s)
+    if (experienceMatch && experienceMatch[1]) {
+      try {
+        // Try to fix and parse the experience array
+        const expText = fixArraySyntaxIssues(experienceMatch[1])
+        const experience = JSON.parse(expText)
+        result.experience = experience
+      } catch (e) {
+        result.experience = []
+      }
+    } else {
+      result.experience = []
+    }
+
+    // Extract education section if present
+    const educationMatch = text.match(/"education"\s*:\s*(\[[\s\S]*?\])/s)
+    if (educationMatch && educationMatch[1]) {
+      try {
+        // Try to fix and parse the education array
+        const eduText = fixArraySyntaxIssues(educationMatch[1])
+        const education = JSON.parse(eduText)
+        result.education = education
+      } catch (e) {
+        result.education = []
+      }
+    } else {
+      result.education = []
+    }
+
+    // Extract summary if present
+    const summaryMatch = text.match(/"summary"\s*:\s*"([^"]*?)"/s)
+    if (summaryMatch && summaryMatch[1]) {
+      result.summary = summaryMatch[1]
+    } else {
+      result.summary = ""
+    }
+
+    // Extract strengths if present
+    const strengthsMatch = text.match(/"strengths"\s*:\s*(\[[\s\S]*?\])/s)
+    if (strengthsMatch && strengthsMatch[1]) {
+      try {
+        const strengthsText = fixArraySyntaxIssues(strengthsMatch[1])
+        const strengths = JSON.parse(strengthsText)
+        result.strengths = strengths
+      } catch (e) {
+        result.strengths = []
+      }
+    } else {
+      result.strengths = []
+    }
+
+    // Extract weaknesses if present
+    const weaknessesMatch = text.match(/"weaknesses"\s*:\s*(\[[\s\S]*?\])/s)
+    if (weaknessesMatch && weaknessesMatch[1]) {
+      try {
+        const weaknessesText = fixArraySyntaxIssues(weaknessesMatch[1])
+        const weaknesses = JSON.parse(weaknessesText)
+        result.weaknesses = weaknesses
+      } catch (e) {
+        result.weaknesses = []
+      }
+    } else {
+      result.weaknesses = []
+    }
+
+    return result
   } catch (error) {
-    console.error("Error extracting JSON from text:", error)
+    console.error("Error extracting partial JSON:", error)
     return null
   }
+}
+
+/**
+ * Fix array syntax issues
+ * @param arrayText Array text to fix
+ * @returns Fixed array text
+ */
+function fixArraySyntax(arrayText: string): string {
+  if (!arrayText) return "[]"
+
+  let result = arrayText.trim()
+
+  // Ensure array starts with [
+  if (!result.startsWith("[")) {
+    result = "[" + result
+  }
+
+  // Ensure array ends with ]
+  if (!result.endsWith("]")) {
+    result = result + "]"
+  }
+
+  // Fix missing quotes around property names in objects within arrays
+  result = result.replace(/(\{|,)\s*([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+
+  // Fix missing quotes around string values
+  result = result.replace(/:\s*([a-zA-Z0-9_]+)(\s*[,}])/g, ':"$1"$2')
+
+  // Fix trailing commas
+  result = result.replace(/,\s*\]/g, "]")
+
+  // Fix missing commas between array elements
+  result = result.replace(/\}(\s*)\{/g, "},\n$1{")
+
+  return result
+}
+
+/**
+ * Repair common JSON syntax errors
+ * @param text JSON text to repair
+ * @returns Repaired JSON text
+ */
+export function repairJSON(text: string): string {
+  if (!text) return "{}"
+
+  let result = text.trim()
+
+  // Remove any non-JSON content before the first opening brace
+  const firstBrace = result.indexOf("{")
+  if (firstBrace > 0) {
+    result = result.substring(firstBrace)
+  }
+
+  // Remove any non-JSON content after the last closing brace
+  const lastBrace = result.lastIndexOf("}")
+  if (lastBrace !== -1 && lastBrace < result.length - 1) {
+    result = result.substring(0, lastBrace + 1)
+  }
+
+  // Fix specific array closure issues (addressing the errors in the logs)
+  result = fixArrayClosureIssues(result)
+
+  // Fix missing quotes around property names
+  result = result.replace(/(\{|,)\s*([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+
+  // Fix trailing commas in objects
+  result = result.replace(/,\s*\}/g, "}")
+
+  // Fix trailing commas in arrays
+  result = result.replace(/,\s*\]/g, "]")
+
+  // Fix missing quotes around string values
+  result = result.replace(/:\s*([a-zA-Z0-9_]+)(\s*[,}])/g, ':"$1"$2')
+
+  // Fix unclosed arrays before new properties
+  result = fixUnclosedArraysBeforeNewProperties(result)
+
+  // Fix single quotes to double quotes
+  result = result.replace(/'/g, '"')
+
+  // Fix unquoted property values that should be strings
+  result = result.replace(/:\s*([a-zA-Z][a-zA-Z0-9_\s]*[a-zA-Z0-9_])(\s*[,}])/g, ':"$1"$2')
+
+  // Fix control characters in string literals
+  result = result.replace(/"[^"]*"/g, (match) => {
+    return match.replace(/[\x00-\x1F\x7F-\x9F]/g, " ")
+  })
+
+  // Balance brackets and braces
+  result = balanceBracketsAndBraces(result)
+
+  return result
+}
+
+/**
+ * Fix specific array closure issues seen in the error logs
+ * @param json JSON string to fix
+ * @returns Fixed JSON string
+ */
+function fixArrayClosureIssues(json: string): string {
+  let result = json
+
+  // Fix arrays that are immediately followed by another property without proper closure
+  // Pattern: "property": ["value1", "value2"]"nextProperty":
+  result = result.replace(/(\])\s*"([^"]+)":/g, '$1, "$2":')
+
+  // Fix arrays that are immediately followed by another property with a missing comma
+  // Pattern: "property": ["value1", "value2"] "nextProperty":
+  result = result.replace(/(\])\s+("([^"]+)"):/g, "$1, $2:")
+
+  // Fix specific pattern from error logs: "marketing concepts"]"
+  result = result.replace(/"([^"]+)"\]/g, '"$1"],')
+
+  // Fix specific pattern from error logs: "ering", "selection"]"
+  result = result.replace(/("([^"]+)")\s*,\s*("([^"]+)")\]/g, "$1, $3],")
+
+  // Fix arrays with control characters
+  result = result.replace(/\[\s*"[^"]*?[\x00-\x1F\x7F-\x9F][^"]*?"\s*\]/g, (match) => {
+    return match.replace(/[\x00-\x1F\x7F-\x9F]/g, " ")
+  })
+
+  // Fix arrays with missing commas between elements
+  result = result.replace(/"([^"]*)"\s+"([^"]*)"/g, '"$1", "$2"')
+
+  // Remove any trailing commas after the last property
+  result = result.replace(/,\s*$/g, "")
+
+  // Remove any trailing characters after the JSON object ends
+  const lastBrace = result.lastIndexOf("}")
+  if (lastBrace !== -1 && lastBrace < result.length - 1) {
+    result = result.substring(0, lastBrace + 1)
+  }
+
+  return result
+}
+
+/**
+ * Fix unclosed arrays before new properties
+ * This is a common issue where an array is not closed before a new property is defined
+ */
+function fixUnclosedArraysBeforeNewProperties(json: string): string {
+  // Look for patterns like: ["item1", "item2" "property":
+  // which should be: ["item1", "item2"], "property":
+  let result = json
+
+  // First pass: Fix arrays that are immediately followed by a property name without closing bracket
+  result = result.replace(/(\[[^\]]*?)("[\w\s]+")\s*:/g, "$1], $2:")
+
+  // Second pass: Fix arrays with values that are immediately followed by a property without proper closure
+  result = result.replace(/(\[[^\]]*?"[^"]*?")\s+("[\w\s]+")\s*:/g, "$1], $2:")
+
+  // Third pass: Fix arrays with multiple values that are immediately followed by a property
+  result = result.replace(/(\[[^\]]*?"[^"]*?"(?:\s*,\s*"[^"]*?")+)\s+("[\w\s]+")\s*:/g, "$1], $2:")
+
+  // Fourth pass: Fix arrays that end with a string and are followed by a new property
+  result = result.replace(/(\[[^\]]*?"[^"]*?")\s*\n\s*"([^"]+)"\s*:/g, '$1],\n"$2":')
+
+  return result
 }
 
 /**
@@ -215,60 +560,6 @@ function fixUnclosedArraysBeforeProperties(json: string): string {
 }
 
 /**
- * Attempts to repair JSON based on specific error patterns
- */
-function attemptJSONRepair(jsonString: string, error: Error): string {
-  if (typeof jsonString !== "string") {
-    console.error("attemptJSONRepair received non-string input:", typeof jsonString)
-    return "{}" // Return empty object as fallback
-  }
-
-  // First, try to extract JSON if the string contains explanatory text
-  const extractedJson = extractJsonFromText(jsonString)
-  if (extractedJson) {
-    return JSON.stringify(extractedJson)
-  }
-
-  let repairedJSON = jsonString
-
-  // Get error message and position information
-  const errorMsg = error.message
-  const position = getErrorPosition(errorMsg)
-
-  // Fix unclosed arrays before new properties
-  repairedJSON = fixUnclosedArraysBeforeProperties(repairedJSON)
-
-  // Apply specific repairs based on error message
-  if (errorMsg.includes("Expected ':' after property name")) {
-    repairedJSON = fixMissingColons(repairedJSON)
-  }
-
-  if (errorMsg.includes("Expected ',' or ']' after array element")) {
-    repairedJSON = fixMissingCommasInArrays(repairedJSON)
-  }
-
-  if (errorMsg.includes("Expected ',' or '}' after property value")) {
-    repairedJSON = fixMissingCommasInObjects(repairedJSON)
-  }
-
-  // Common repair strategies
-  repairedJSON = fixTrailingCommas(repairedJSON)
-  repairedJSON = fixMissingCommas(repairedJSON)
-  repairedJSON = fixUnquotedPropertyNames(repairedJSON)
-  repairedJSON = fixMissingQuotes(repairedJSON)
-
-  // Position-specific repairs if we have position info
-  if (position > 0) {
-    repairedJSON = fixPositionSpecificIssue(repairedJSON, position, errorMsg)
-  }
-
-  // Balance brackets and braces
-  repairedJSON = balanceBracketsAndBraces(repairedJSON)
-
-  return repairedJSON
-}
-
-/**
  * More aggressive JSON repair for difficult cases
  */
 function aggressiveJSONRepair(jsonString: string): string {
@@ -277,59 +568,36 @@ function aggressiveJSONRepair(jsonString: string): string {
     return "{}" // Return empty object as fallback
   }
 
-  // First, try to extract JSON if the string contains explanatory text
-  const extractedJson = extractJsonFromText(jsonString)
-  if (extractedJson) {
-    return JSON.stringify(extractedJson)
-  }
-
   try {
-    // First, fix unclosed arrays before new properties
-    let repaired = fixUnclosedArraysBeforeProperties(jsonString)
+    // First, sanitize control characters
+    let repaired = sanitizeControlCharacters(jsonString)
 
-    // Try to normalize the JSON structure
-    repaired = repaired
-      // Fix property names without quotes
-      .replace(/([{,]\s*)([a-zA-Z0-9_$]+)(\s*)([:}])/g, '$1"$2"$3$4')
+    // Fix array syntax issues
+    repaired = fixArraySyntaxIssues(repaired)
 
-      // Fix missing colons after property names
-      .replace(/([{,]\s*"[^"]+")(\s*)([^:\s,}])/g, "$1:$2$3")
+    // Fix property name and value issues
+    repaired = fixPropertyNameAndValueIssues(repaired)
 
-      // Fix values without quotes that should be strings
-      .replace(/:(\s*)([a-zA-Z][a-zA-Z0-9_$]*)([,}])/g, ':"$2"$3')
+    // Fix structural issues
+    repaired = fixStructuralIssues(repaired)
 
-      // Fix trailing commas
-      .replace(/,(\s*[}\]])/g, "$1")
+    // Additional aggressive fixes
 
-      // Fix missing commas between properties
-      .replace(/}(\s*){/g, "},\n$1{")
-      .replace(/](\s*)\[/g, "],\n$1[")
-      .replace(/"([^"]*)"(\s*)"([^"]*)"/g, '"$1",\n$2"$3"')
+    // Fix missing commas between properties
+    repaired = repaired.replace(/}(\s*){/g, "},\n$1{")
+    repaired = repaired.replace(/](\s*){/g, "],\n$1{")
+    repaired = repaired.replace(/}(\s*)\[/g, "},\n$1[")
+    repaired = repaired.replace(/](\s*)\[/g, "],\n$1[")
 
-      // Fix missing commas in arrays
-      .replace(/](\s*)\[/g, "],\n$1[")
-      .replace(/([^,{[])\s*"([^"]+)"/g, (match, p1, p2) => {
-        // Don't add comma after colons
-        if (p1 === ":" || p1 === "{" || p1 === "[") return match
-        return p1 + ',\n"' + p2 + '"'
-      })
+    // Fix JavaScript-style comments
+    repaired = repaired.replace(/\/\/.*?\n/g, "\n")
+    repaired = repaired.replace(/\/\*[\s\S]*?\*\//g, "")
 
-      // Fix unbalanced quotes
-      .replace(/"([^"]*?)(?=[,}])/g, '"$1"')
-
-      // Fix JavaScript-style comments
-      .replace(/\/\/.*?\n/g, "\n")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-
-      // Fix specific issues with qualifications property
-      .replace(/"qualifications"\s*(\w+)/g, '"qualifications": $1')
-      .replace(/"qualifications"\s*:\s*(\w+)/g, '"qualifications": {$1')
-
-      // Fix specific case from the error
-      .replace(/"strengths"\s*:\s*\[\s*"([^"]+)"\s*,\s*"weaknesses"/g, '"strengths": ["$1"], "weaknesses"')
-
-    // Try to balance brackets and braces
-    repaired = balanceBracketsAndBraces(repaired)
+    // Remove any trailing characters after the JSON object ends
+    const lastBrace = repaired.lastIndexOf("}")
+    if (lastBrace !== -1 && lastBrace < repaired.length - 1) {
+      repaired = repaired.substring(0, lastBrace + 1)
+    }
 
     return repaired
   } catch (error) {
@@ -378,12 +646,10 @@ function fixMissingCommasInObjects(json: string): string {
  * Fixes trailing commas in objects and arrays
  */
 function fixTrailingCommas(json: string): string {
-  // Fix trailing commas in objects
+  // Remove trailing commas in objects
   json = json.replace(/,\s*}/g, "}")
-
-  // Fix trailing commas in arrays
+  // Remove trailing commas in arrays
   json = json.replace(/,\s*\]/g, "]")
-
   return json
 }
 
@@ -391,13 +657,12 @@ function fixTrailingCommas(json: string): string {
  * Fixes missing commas between properties
  */
 function fixMissingCommas(json: string): string {
-  // Look for patterns where a property ends and another begins without a comma
+  // Add commas between properties where missing
   return json
-    .replace(/}(\s*){/g, "},\n$1{")
-    .replace(/](\s*)\[/g, "],\n$1[")
-    .replace(/}(\s*)\[/g, "},\n$1[")
-    .replace(/](\s*){/g, "],\n$1{")
-    .replace(/"(\s*)"(?=\s*:)/g, '",\n$1"')
+    .replace(/}(\s*){/g, "},$1{")
+    .replace(/](\s*){/g, "],$1{")
+    .replace(/}(\s*)\[/g, "},$1[")
+    .replace(/](\s*)\[/g, "],$1[")
 }
 
 /**
@@ -412,8 +677,8 @@ function fixUnquotedPropertyNames(json: string): string {
  * Fixes missing quotes around string values
  */
 function fixMissingQuotes(json: string): string {
-  // This is a simplified approach - a more robust solution would use a state machine
-  return json.replace(/:(\s*)([a-zA-Z0-9_$]+)([,}])/g, ':"$2"$3')
+  // Replace property values that are not quoted
+  return json.replace(/:\s*([a-zA-Z0-9_]+)(\s*[,}])/g, ': "$1"$2')
 }
 
 /**
@@ -429,26 +694,35 @@ function fixPositionSpecificIssue(json: string, position: number, errorMsg: stri
     console.log(`JSON error context around position ${position}: "${context}"`)
 
     // Check for specific error patterns
-    if (errorMsg.includes("Expected ':' after property name")) {
-      // Missing colon after property name
-      return json.substring(0, position) + ":" + json.substring(position)
-    }
+    if (errorMsg.includes("Expected ',' or ']' after array element")) {
+      // This is the specific error we're seeing - missing comma or closing bracket in array
 
-    if (errorMsg.includes("Expected ',' or ']'")) {
-      // Check if this is an unclosed array before a new property
+      // Check if we need to add a comma or a closing bracket
       const beforeError = json.substring(Math.max(0, position - 100), position)
       const afterError = json.substring(position, Math.min(json.length, position + 100))
 
-      // Check if we're in an array and a new property is starting
-      if (beforeError.includes("[") && !beforeError.includes("]", beforeError.lastIndexOf("["))) {
-        // If the next part looks like a property name, close the array
-        if (afterError.match(/^\s*"[^"]+"\s*:/)) {
-          return json.substring(0, position) + "]," + json.substring(position)
-        }
+      // If the next non-whitespace character is a quote or number, we need a comma
+      if (afterError.trim().match(/^["0-9]/)) {
+        return json.substring(0, position) + ", " + json.substring(position)
       }
 
-      // Otherwise just add a comma
+      // If the next non-whitespace character is a property name, we need to close the array
+      if (afterError.trim().match(/^"[^"]+"\s*:/)) {
+        return json.substring(0, position) + "], " + json.substring(position)
+      }
+
+      // If the next non-whitespace character is a closing brace, we need to close the array
+      if (afterError.trim().startsWith("}")) {
+        return json.substring(0, position) + "]" + json.substring(position)
+      }
+
+      // Default: add a comma
       return json.substring(0, position) + "," + json.substring(position)
+    }
+
+    if (errorMsg.includes("Expected ':' after property name")) {
+      // Missing colon after property name
+      return json.substring(0, position) + ":" + json.substring(position)
     }
 
     if (errorMsg.includes("Expected ',' or '}'")) {
@@ -459,6 +733,11 @@ function fixPositionSpecificIssue(json: string, position: number, errorMsg: stri
     if (errorMsg.includes("Expected property name or '}'")) {
       // Unexpected character where property name should be
       return json.substring(0, position) + "}" + json.substring(position)
+    }
+
+    if (errorMsg.includes("Bad control character")) {
+      // Replace the control character with a space
+      return json.substring(0, position) + " " + json.substring(position + 1)
     }
 
     if (errorMsg.includes("Unexpected token")) {
@@ -546,74 +825,128 @@ function balanceBracketsAndBraces(json: string): string {
 }
 
 /**
- * Attempts to extract a valid JSON subset from malformed JSON
+ * Fix unclosed arrays
+ * @param json JSON string to fix
+ * @returns Fixed JSON string
  */
-function extractValidJSONSubset(json: string): string {
-  try {
-    // First, try to extract JSON if the string contains explanatory text
-    const extractedJson = extractJsonFromText(json)
-    if (extractedJson) {
-      return JSON.stringify(extractedJson)
-    }
+function fixUnclosedArrays(json: string): string {
+  // Count opening and closing brackets
+  const openBrackets = (json.match(/\[/g) || []).length
+  const closeBrackets = (json.match(/\]/g) || []).length
 
-    // Try to find the outermost complete JSON object
-    const objectMatch = json.match(/({[\s\S]*})/)
-    if (objectMatch) {
-      try {
-        JSON.parse(objectMatch[1])
-        return objectMatch[1]
-      } catch (e) {
-        // If parsing fails, continue with other strategies
+  // Add missing closing brackets
+  let result = json
+  for (let i = 0; i < openBrackets - closeBrackets; i++) {
+    // Find the last unclosed array
+    let depth = 0
+    let lastOpenPos = -1
+
+    for (let j = 0; j < result.length; j++) {
+      if (result[j] === "[") {
+        depth++
+        lastOpenPos = j
+      } else if (result[j] === "]") {
+        depth--
       }
     }
 
-    // Try to find the outermost complete JSON array
-    const arrayMatch = json.match(/(\[[\s\S]*\])/)
-    if (arrayMatch) {
-      try {
-        JSON.parse(arrayMatch[1])
-        return arrayMatch[1]
-      } catch (e) {
-        // If parsing fails, continue with other strategies
+    if (depth > 0 && lastOpenPos !== -1) {
+      // Find a good position to close the array
+      // Look for the next property start or object end
+      const nextPropMatch = result.slice(lastOpenPos).match(/"([^"]+)"\s*:/)
+      const nextObjEndPos = result.indexOf("}", lastOpenPos)
+
+      if (nextPropMatch && nextPropMatch.index) {
+        const insertPos = lastOpenPos + nextPropMatch.index
+        result = result.slice(0, insertPos) + "]," + result.slice(insertPos)
+      } else if (nextObjEndPos !== -1) {
+        result = result.slice(0, nextObjEndPos) + "]" + result.slice(nextObjEndPos)
+      } else {
+        // Just append to the end
+        result += "]"
       }
+    } else {
+      // Just append to the end
+      result += "]"
     }
-
-    // Try to construct a minimal valid object with the properties we can extract
-    try {
-      const result = {}
-
-      // Extract skills
-      const skillsMatch = json.match(/"skills"\s*:\s*({[^}]*})/)
-      if (skillsMatch) {
-        try {
-          const skillsJson = fixMissingQuotes(skillsMatch[1])
-          result.skills = JSON.parse(skillsJson)
-        } catch (e) {
-          // If parsing fails, set a default
-          result.skills = { technical: [], soft: [] }
-        }
-      }
-
-      // Extract other properties similarly
-      const experienceMatch = json.match(/"experience"\s*:\s*(\[[^\]]*\])/)
-      if (experienceMatch) {
-        try {
-          result.experience = JSON.parse(experienceMatch[1])
-        } catch (e) {
-          result.experience = []
-        }
-      }
-
-      // Return the constructed object
-      return JSON.stringify(result)
-    } catch (e) {
-      // If construction fails, return a minimal valid object
-    }
-
-    // Last resort: return a minimal valid JSON object
-    return '{"error": "Could not extract valid JSON", "partial": true, "skills": {"technical": [], "soft": []}, "experience": [], "education": [], "summary": "", "strengths": [], "weaknesses": []}'
-  } catch (error) {
-    console.error("Error in extractValidJSONSubset:", error)
-    return '{"error": "Could not extract valid JSON", "partial": true, "skills": {"technical": [], "soft": []}, "experience": [], "education": [], "summary": "", "strengths": [], "weaknesses": []}'
   }
+
+  return result
+}
+
+/**
+ * Fix single quotes to double quotes
+ */
+function fixSingleQuotes(json: string): string {
+  // Replace single quotes with double quotes, but not inside already quoted strings
+  let result = ""
+  let inDoubleQuotes = false
+  let inSingleQuotes = false
+
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i]
+    const prevChar = i > 0 ? json[i - 1] : ""
+
+    if (char === '"' && prevChar !== "\\") {
+      inDoubleQuotes = !inDoubleQuotes
+      result += char
+    } else if (char === "'" && prevChar !== "\\" && !inDoubleQuotes) {
+      inSingleQuotes = !inSingleQuotes
+      result += '"' // Replace single quote with double quote
+    } else if (inSingleQuotes && char === "'" && prevChar === "\\") {
+      result = result.slice(0, -1) + '\\"' // Replace escaped single quote
+    } else {
+      result += char
+    }
+  }
+
+  return result
+}
+
+/**
+ * Fix newlines in strings
+ */
+function fixNewLinesInStrings(json: string): string {
+  // Replace literal newlines in strings with \n
+  let result = ""
+  let inQuotes = false
+
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i]
+    const prevChar = i > 0 ? json[i - 1] : ""
+
+    if (char === '"' && prevChar !== "\\") {
+      inQuotes = !inQuotes
+      result += char
+    } else if (inQuotes && (char === "\n" || char === "\r")) {
+      result += "\\n"
+    } else {
+      result += char
+    }
+  }
+
+  return result
+}
+
+/**
+ * Fix missing braces around objects
+ */
+function fixMissingBraces(json: string): string {
+  // If the JSON doesn't start with { and end with }, add them
+  let result = json.trim()
+  if (!result.startsWith("{") && !result.startsWith("[")) {
+    result = "{" + result
+  }
+  if (!result.endsWith("}") && !result.endsWith("]")) {
+    result += "}"
+  }
+  return result
+}
+
+/**
+ * Fix unquoted property names
+ */
+function fixUnquotedProperties(json: string): string {
+  // Add quotes around property names that are not quoted
+  return json.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3')
 }

@@ -10,7 +10,7 @@ import { extractJobSkillsChain } from "@/app/actions/extract-job-skills-chain"
 import { useToast } from "@/hooks/use-toast"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { SkillExtractionLogViewer } from "./skill-extraction-log-viewer"
-import { storeCompatibleAnalysisData, getCurrentSessionId } from "@/utils/analysis-session-manager"
+import { getCurrentSessionId, storeCompatibleAnalysisData } from "@/utils/analysis-session-manager"
 
 export function JobDescriptionInput({ onSubmit }) {
   const [jobDescription, setJobDescription] = useState("")
@@ -26,6 +26,31 @@ export function JobDescriptionInput({ onSubmit }) {
     setError("")
 
     if (jobDescription.trim()) {
+      // If this is a new job description, clear any previous job analysis
+      const previousJobDesc = localStorage.getItem("jobDescriptionText")
+      if (previousJobDesc !== jobDescription) {
+        // Clear previous job analysis data but keep resume data
+        const currentSession = getCurrentSessionId()
+        const keysToRemove = []
+
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i)
+          if (
+            key &&
+            key.startsWith(currentSession) &&
+            (key.includes("jobAnalysis") ||
+              key.includes("extractedJobSkills") ||
+              key.includes("skillGapAnalysis") ||
+              key.includes("projectIdeas"))
+          ) {
+            keysToRemove.push(key)
+          }
+        }
+
+        keysToRemove.forEach((key) => localStorage.removeItem(key))
+        console.log(`Cleared ${keysToRemove.length} previous job analysis items`)
+      }
+
       // Store the job description text for comparison
       localStorage.setItem("jobDescriptionText", jobDescription)
 
@@ -110,7 +135,13 @@ export function JobDescriptionInput({ onSubmit }) {
           storeCompatibleAnalysisData("jobAnalysis", enhancedAnalysis)
           storeCompatibleAnalysisData("extractedJobSkills", extractedSkills)
 
+          // Also store the raw job description text
+          storeCompatibleAnalysisData("jobDescriptionText", jobDescription)
+
           console.log("Stored job analysis in session:", getCurrentSessionId())
+
+          // Debug log all stored data
+          // debugLogAllStoredData()
         } catch (error) {
           console.error("Error saving job analysis:", error)
         }

@@ -63,7 +63,8 @@
     "perf_hooks": "latest",
     "@supabase/supabase-js": "latest",
     "child_process": "latest",
-    "path": "latest"
+    "path": "latest",
+    "mammoth": "latest"
   },
   "devDependencies": {
     "@types/node": "^22",

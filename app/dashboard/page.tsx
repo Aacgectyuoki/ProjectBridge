@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,6 +17,10 @@ import type { JobAnalysisResult } from "@/app/actions/analyze-job-description"
 import { SkillsLogViewer } from "@/components/skills-log-viewer"
 // Add the new DetailedSkillExtractionLog component to the imports
 import { DetailedSkillExtractionLog } from "@/components/detailed-skill-extraction-log"
+import { forceNewSession } from "@/utils/analysis-session-manager"
+// Import the debug function
+import { debugLogAllStoredData } from "@/utils/analysis-session-manager"
+import { toast } from "@/components/ui/use-toast"
 
 export default function Dashboard() {
   const [activeStep, setActiveStep] = useState(1)
@@ -30,6 +34,13 @@ export default function Dashboard() {
   const [fileUploaded, setFileUploaded] = useState(false)
   const [showSkillsSummary, setShowSkillsSummary] = useState(false)
   const [showJobSkillsLog, setShowJobSkillsLog] = useState(false)
+
+  useEffect(() => {
+    // Create a new session when the dashboard is loaded directly
+    if (window.location.pathname === "/dashboard" && !window.location.search.includes("keepSession")) {
+      forceNewSession()
+    }
+  }, [])
 
   const handleResumeUpload = (data) => {
     setResumeData(data)
@@ -270,6 +281,21 @@ export default function Dashboard() {
         </div>
         <SkillsLogViewer />
         <DetailedSkillExtractionLog />
+        <div className="mt-8 text-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              debugLogAllStoredData()
+              toast({
+                title: "Debug Info",
+                description: "Session data logged to console",
+              })
+            }}
+          >
+            Debug: Log Session Data
+          </Button>
+        </div>
       </main>
     </div>
   )

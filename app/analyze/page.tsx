@@ -40,6 +40,16 @@ export default function AnalyzePage() {
       const sessionId = getCurrentSessionId()
       console.log("Using session ID:", sessionId)
 
+      // Debug log all stored data to help diagnose issues
+      const debugLogAllStoredData = () => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i)
+          const value = localStorage.getItem(key)
+          console.log(`localStorage[${key}] = ${value}`)
+        }
+      }
+      debugLogAllStoredData()
+
       try {
         // Try to get data using our enhanced compatible data retrieval
         const resumeData = getCompatibleAnalysisData("resumeAnalysis", null)

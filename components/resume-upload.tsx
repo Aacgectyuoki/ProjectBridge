@@ -1,12 +1,6 @@
 "use client"
-
-import { AlertDescription } from "@/components/ui/alert"
-
-import { AlertTitle } from "@/components/ui/alert"
-
-import { Alert } from "@/components/ui/alert"
-
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -18,91 +12,90 @@ import { extractSkills } from "@/app/actions/extract-skills"
 import { useToast } from "@/hooks/use-toast"
 import { SkillsLogger } from "@/utils/skills-logger"
 import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
-import { storeAnalysisData, getCurrentSessionId } from "@/utils/analysis-session-manager"
+import { getCurrentSessionId, forceNewSession } from "@/utils/analysis-session-manager"
+import { storeCompatibleAnalysisData } from "@/utils/analysis-session-manager"
+import { validateResumeFile, extractTextFromFile } from "@/utils/file-processor"
+import { logDetailedError, checkpoint, timeExecution } from "@/utils/debug-utils"
+import { cleanupExtractedSkills } from "@/utils/skill-extraction-utils"
+import { cleanExtractedText } from "@/utils/text-preprocessor"
+import { FileUploadProgress } from "@/components/file-upload-progress"
 
 export function ResumeUpload({ onUpload, onFileSelect }) {
   const [file, setFile] = useState(null)
   const [linkedinUrl, setLinkedinUrl] = useState("")
   const [resumeText, setResumeText] = useState("")
-  const [isUploading, setIsUploading] = useState(false)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState("")
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [extractedText, setExtractedText] = useState("")
+  const [isExtracting, setIsExtracting] = useState(false)
+  const [extractionProgress, setExtractionProgress] = useState(0)
+  const [showExtractedText, setShowExtractedText] = useState(false)
+  const fileInputRef = useRef(null)
   const { toast } = useToast()
-  const sessionId = getCurrentSessionId()
 
-  // Add this function near the top of the component, after the useState declarations
-  const validateInput = (text: string) => {
-    // Check if the text is too similar to the job description (if available)
-    const jobDescText = localStorage.getItem("jobDescriptionText")
-    if (jobDescText) {
-      // Simple similarity check - if more than 80% similar, likely the same text
-      const similarity = calculateTextSimilarity(text, jobDescText)
-      if (similarity > 0.8) {
-        toast({
-          title: "Warning: Similar to job description",
-          description:
-            "Your resume text appears very similar to the job description. Please ensure you've pasted your actual resume.",
-          variant: "warning",
-          duration: 6000,
-        })
-        return false
-      }
+  // Reset progress when component unmounts
+  useEffect(() => {
+    return () => {
+      setUploadProgress(0)
     }
-    return true
-  }
-
-  // Add this helper function
-  const calculateTextSimilarity = (text1: string, text2: string) => {
-    // Normalize texts
-    const normalized1 = text1.toLowerCase().replace(/\s+/g, " ").trim()
-    const normalized2 = text2.toLowerCase().replace(/\s+/g, " ").trim()
-
-    // Simple check - if texts are nearly identical
-    if (normalized1 === normalized2) return 1.0
-
-    // If one is a substring of the other
-    if (normalized1.includes(normalized2) || normalized2.includes(normalized1)) {
-      return 0.9
-    }
-
-    // More sophisticated check could be implemented here
-    // For now, just check if they share a lot of the same words
-    const words1 = new Set(normalized1.split(" "))
-    const words2 = new Set(normalized2.split(" "))
-
-    const intersection = new Set([...words1].filter((x) => words2.has(x)))
-    const union = new Set([...words1, ...words2])
-
-    return intersection.size / union.size
-  }
+  }, [])
 
   const handleFileChange = async (e) => {
     const selectedFile = e.target.files?.[0]
-    if (selectedFile) {
-      setFile(selectedFile)
-      // Notify parent component that a file has been selected
-      if (onFileSelect) {
-        onFileSelect(true)
-      }
+    if (!selectedFile) return
 
-      // Read file content if it's a text file
-      if (selectedFile.type === "text/plain") {
-        try {
-          const text = await selectedFile.text()
-          setResumeText(text)
-        } catch (error) {
-          console.error("Error reading file:", error)
-          toast({
-            title: "Error reading file",
-            description: "Could not read the file content. Please try again.",
-            variant: "destructive",
-          })
+    setFile(selectedFile)
+    // Notify parent component that a file has been selected
+    if (onFileSelect) {
+      onFileSelect(true)
+    }
+
+    // Read file content if it's a text file
+    if (selectedFile.type === "text/plain") {
+      try {
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          setResumeText(event.target.result)
+          setExtractedText(event.target.result)
+          setShowExtractedText(true)
         }
+        reader.readAsText(selectedFile)
+      } catch (error) {
+        logDetailedError(error, "handleFileChange")
+        toast({
+          title: "Error reading file",
+          description: "Could not read the file content. Please try again.",
+          variant: "destructive",
+        })
       }
-    } else {
-      // Notify parent component that no file is selected
-      if (onFileSelect) {
-        onFileSelect(false)
+    } else if (
+      selectedFile.type === "application/pdf" ||
+      selectedFile.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) {
+      // For PDF and DOCX files, extract text
+      setIsExtracting(true)
+      setExtractionProgress(0)
+
+      try {
+        // STEP 1: Extract text from file
+        const text = await extractTextFromFile(selectedFile, (progress) => {
+          setExtractionProgress(progress)
+        })
+
+        setExtractedText(text)
+        setShowExtractedText(true)
+        setIsExtracting(false)
+      } catch (error) {
+        setIsExtracting(false)
+        logDetailedError(error, "extractTextFromFile")
+        toast({
+          title: "Text Extraction Failed",
+          description:
+            "Failed to extract text from the file. Please try another file or paste your resume text directly.",
+          variant: "destructive",
+        })
       }
     }
   }
@@ -127,27 +120,32 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
   // Function to store analysis data consistently
   const storeAnalysisResults = (analysisData, extractedSkills, sourceText) => {
     try {
-      console.log(`Storing resume analysis in session ${sessionId}`)
+      checkpoint("storeAnalysisResults-start", { sessionId: getCurrentSessionId() })
 
-      // Store in session storage with session ID
-      storeAnalysisData("resumeAnalysis", analysisData)
-      storeAnalysisData("extractedResumeSkills", extractedSkills)
+      // Clean up and properly categorize skills
+      const cleanedAnalysis = {
+        ...analysisData,
+        skills: cleanupExtractedSkills({ skills: analysisData.skills }).skills,
+      }
+
+      // Store in both session-specific and legacy formats
+      storeCompatibleAnalysisData("resumeAnalysis", cleanedAnalysis)
+      storeCompatibleAnalysisData("extractedResumeSkills", extractedSkills)
 
       // Also store the raw text for reference
       if (sourceText) {
-        storeAnalysisData("resumeText", sourceText)
+        storeCompatibleAnalysisData("resumeText", sourceText)
       }
 
       // Log for debugging
-      console.log("Resume analysis stored successfully")
-      console.log("Technical skills:", analysisData.skills.technical)
-      if (analysisData.skills.soft) {
-        console.log("Soft skills:", analysisData.skills.soft)
-      }
+      checkpoint("storeAnalysisResults-complete", {
+        technicalSkills: cleanedAnalysis.skills.technical?.length || 0,
+        softSkills: cleanedAnalysis.skills.soft?.length || 0,
+      })
 
       return true
     } catch (error) {
-      console.error("Error storing resume analysis:", error)
+      logDetailedError(error, "storeAnalysisResults")
       return false
     }
   }
@@ -179,61 +177,31 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
     }
   }
 
-  const handleTextAnalysis = async (text) => {
-    setIsAnalyzing(true)
-    try {
-      const result = await analyzeResume(text)
-      if (result) {
-        // setAnalysisResults(result); // This line was removed because setAnalysisResults is not defined
-      } else {
-        toast({
-          title: "Analysis Error",
-          description: "Failed to analyze resume. Please try again.",
-          variant: "destructive",
-        })
-      }
-    } catch (error) {
-      console.error("Resume analysis error:", error)
-      toast({
-        title: "Analysis Error",
-        description: "An unexpected error occurred during analysis.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsAnalyzing(false)
-    }
-  }
-
-  const handleTextAnalysisOld = async (e) => {
+  const handleTextAnalysis = async (e) => {
     e.preventDefault()
     setError("")
 
     if (resumeText) {
-      // Validate input before proceeding
-      if (!validateInput(resumeText)) {
-        // Continue anyway, but the warning has been shown
-      }
+      // Create a new session for this analysis
+      forceNewSession()
 
       try {
         setIsAnalyzing(true)
-        const startTime = performance.now()
+        checkpoint("handleTextAnalysis-start")
+
+        // Clean and preprocess the text
+        const cleanedText = cleanExtractedText(resumeText)
 
         // First, extract skills using our new LLM-based extractor
         let extractedSkills
         try {
-          extractedSkills = await extractSkills(resumeText, "resume")
-          console.log("Successfully extracted skills:", extractedSkills)
+          extractedSkills = await timeExecution(() => extractSkills(cleanedText, "resume"), "extractSkills")
+          checkpoint("extractSkills-complete", extractedSkills)
 
           // Log the extraction with our enhanced logger
-          const processingTime = performance.now() - startTime
-          EnhancedSkillsLogger.logExtractedSkills(
-            resumeText,
-            extractedSkills,
-            "resume-text-input",
-            Math.round(processingTime),
-          )
+          EnhancedSkillsLogger.logExtractedSkills(cleanedText, extractedSkills, "resume-text-input", 0)
         } catch (skillsError) {
-          console.error("Error extracting skills:", skillsError)
+          logDetailedError(skillsError, "extractSkills")
           // Continue with default skills
           extractedSkills = {
             technical: [],
@@ -257,15 +225,18 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
         // Then, analyze the resume for other information
         let analysisResult
         try {
-          analysisResult = await analyzeResume(resumeText)
+          analysisResult = await timeExecution(() => analyzeResume(cleanedText), "analyzeResume")
+          checkpoint("analyzeResume-complete", {
+            hasSkills: !!analysisResult?.skills,
+            technicalSkillsCount: analysisResult?.skills?.technical?.length || 0,
+          })
 
           // Validate the result has the expected structure
           if (!analysisResult || !analysisResult.skills) {
-            console.error("Invalid analysis result structure:", analysisResult)
             throw new Error("Invalid analysis result structure")
           }
         } catch (analysisError) {
-          console.error("Error in resume analysis:", analysisError)
+          logDetailedError(analysisError, "analyzeResume")
 
           // Create a fallback analysis result
           analysisResult = {
@@ -317,12 +288,13 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
         }
 
         // Store the analysis result using our session management
-        storeAnalysisResults(enhancedAnalysis, extractedSkills, resumeText)
+        const storageSuccess = storeAnalysisResults(enhancedAnalysis, extractedSkills, cleanedText)
+        checkpoint("storeAnalysisResults", { success: storageSuccess })
 
         setIsAnalyzing(false)
         onUpload({
           type: "text",
-          data: resumeText,
+          data: cleanedText,
           analysis: enhancedAnalysis,
         })
 
@@ -362,7 +334,7 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
         })
       } catch (error) {
         setIsAnalyzing(false)
-        console.error("Analysis error:", error)
+        logDetailedError(error, "handleTextAnalysis-main")
 
         // Provide a more specific error message for JSON parsing issues
         let errorMessage = "Failed to analyze resume. Please try again."
@@ -403,7 +375,7 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
 
             return
           } catch (retryError) {
-            console.error("Retry also failed:", retryError)
+            logDetailedError(retryError, "handleTextAnalysis-retry")
           }
         }
 
@@ -420,381 +392,270 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
   const handleFileUpload = async (e) => {
     e.preventDefault()
     setError("")
+    setUploadProgress(0)
 
-    if (file) {
+    if (!file) {
+      toast({
+        title: "No file selected",
+        description: "Please select a file to upload",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Create a new session for this upload
+      forceNewSession()
       setIsUploading(true)
+      checkpoint("handleFileUpload-start", { fileName: file.name, fileType: file.type, fileSize: file.size })
 
-      try {
-        // For text files, we can analyze directly
-        if (file.type === "text/plain") {
-          const text = await file.text()
-
-          // Extract skills using our new LLM-based extractor
-          let extractedSkills
-          try {
-            extractedSkills = await extractSkills(text, "resume")
-          } catch (skillsError) {
-            console.error("Error extracting skills:", skillsError)
-            // Continue with default skills
-            extractedSkills = {
-              technical: [],
-              soft: [],
-              tools: [],
-              frameworks: [],
-              languages: [],
-              databases: [],
-              methodologies: [],
-              platforms: [],
-              other: [],
-            }
-
-            toast({
-              title: "Skills extraction limited",
-              description: "We had trouble extracting all skills. Basic analysis will continue.",
-              variant: "warning",
-            })
-          }
-
-          // Analyze the resume for other information
-          let analysisResult
-          try {
-            analysisResult = await analyzeResume(text)
-
-            // Validate the result has the expected structure
-            if (!analysisResult || !analysisResult.skills) {
-              console.error("Invalid analysis result structure:", analysisResult)
-              throw new Error("Invalid analysis result structure")
-            }
-          } catch (analysisError) {
-            console.error("Error in resume analysis:", analysisError)
-
-            // Create a fallback analysis result
-            analysisResult = {
-              skills: {
-                technical: extractedSkills.technical || [],
-                soft: extractedSkills.soft || [],
-              },
-              experience: [],
-              education: [],
-              summary: "Analysis could not be completed fully.",
-              strengths: [],
-              weaknesses: ["Resume analysis was incomplete due to technical issues."],
-            }
-
-            toast({
-              title: "Analysis partially completed",
-              description: "We encountered some issues analyzing your resume, but extracted the skills successfully.",
-              variant: "warning",
-            })
-          }
-
-          // Combine the results
-          const enhancedAnalysis = {
-            ...analysisResult,
-            skills: {
-              technical: [
-                ...(analysisResult.skills.technical || []),
-                ...(extractedSkills.technical || []),
-                ...(extractedSkills.frameworks || []),
-                ...(extractedSkills.languages || []),
-                ...(extractedSkills.databases || []),
-                ...(extractedSkills.tools || []),
-                ...(extractedSkills.platforms || []),
-              ].filter(
-                (skill, index, self) =>
-                  skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-              ),
-              soft: analysisResult.skills.soft
-                ? [
-                    ...(analysisResult.skills.soft || []),
-                    ...(extractedSkills.soft || []),
-                    ...(extractedSkills.methodologies || []),
-                  ].filter(
-                    (skill, index, self) =>
-                      skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-                  )
-                : [],
-            },
-            extractedSkills, // Add the full extracted skills data
-          }
-
-          // Store the analysis result using our session management
-          storeAnalysisResults(enhancedAnalysis, extractedSkills, text)
-
-          SkillsLogger.logSkills(
-            enhancedAnalysis.skills.technical || [],
-            enhancedAnalysis.skills.soft || [],
-            `resume-file-${file.type}`,
-          )
-
-          setIsUploading(false)
-          onUpload({
-            type: "file",
-            data: {
-              name: file.name,
-              type: file.type,
-              size: file.size,
-            },
-            analysis: enhancedAnalysis,
-          })
-
-          // Show more detailed toast with actual skills
-          toast({
-            title: "Resume analyzed successfully",
-            description: (
-              <div className="space-y-1">
-                <p>
-                  <strong>Technical skills:</strong>{" "}
-                  {formatSkillsList((enhancedAnalysis.skills.technical || []).slice(0, 5))}
-                  {enhancedAnalysis.skills.technical && enhancedAnalysis.skills.technical.length > 5
-                    ? ` and ${enhancedAnalysis.skills.technical.length - 5} more`
-                    : ""}
-                </p>
-                {enhancedAnalysis.skills.soft && enhancedAnalysis.skills.soft.length > 0 && (
-                  <p>
-                    <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
-                    {enhancedAnalysis.skills.soft.length > 3
-                      ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
-                      : ""}
-                  </p>
-                )}
-                <p>
-                  <strong>Work experiences:</strong> {(analysisResult.experience || []).length}
-                </p>
-              </div>
-            ),
-            duration: 5000, // Show for longer since there's more to read
-          })
-        } else {
-          // For PDF and DOCX files, we need to extract text first
-          // In a real implementation, this would use a server-side API
-          // For now, we'll use a more comprehensive mock that includes all skills
-
-          // Read the file as an ArrayBuffer to simulate processing
-          const reader = new FileReader()
-
-          reader.onload = async () => {
-            // Simulate text extraction from PDF/DOCX
-            // In a real app, this would use a PDF/DOCX parsing library
-
-            // Create a more comprehensive mock resume text that includes all skills
-            const mockResumeText = `
-            John Doe
-            Software Developer
-            
-            SKILLS
-            JavaScript, React, Node.js, HTML, CSS, TypeScript, GraphQL, MongoDB, AWS, Docker
-            Leadership, Team Management, Communication, Problem Solving, Agile Methodologies
-            
-            EXPERIENCE
-            Senior Developer at Tech Co (2020-Present)
-            - Developed web applications using React and Node.js
-            - Led a team of 5 developers
-            - Implemented CI/CD pipelines using GitHub Actions and Docker
-            - Designed and built GraphQL APIs with Apollo Server
-            
-            Junior Developer at Startup Inc (2018-2020)
-            - Built responsive websites with HTML, CSS, and JavaScript
-            - Worked with REST APIs and MongoDB
-            - Participated in Agile development processes
-            
-            EDUCATION
-            Bachelor of Computer Science, University of Technology (2018)
-          `
-
-            try {
-              // Extract skills using our new LLM-based extractor
-              let extractedSkills
-              try {
-                extractedSkills = await extractSkills(mockResumeText, "resume")
-              } catch (skillsError) {
-                console.error("Error extracting skills:", skillsError)
-                // Continue with default skills
-                extractedSkills = {
-                  technical: [
-                    "JavaScript",
-                    "React",
-                    "Node.js",
-                    "HTML",
-                    "CSS",
-                    "TypeScript",
-                    "GraphQL",
-                    "MongoDB",
-                    "AWS",
-                    "Docker",
-                  ],
-                  soft: ["Leadership", "Team Management", "Communication", "Problem Solving", "Agile Methodologies"],
-                  tools: ["Docker", "GitHub Actions"],
-                  frameworks: ["React"],
-                  languages: ["JavaScript", "TypeScript"],
-                  databases: ["MongoDB"],
-                  methodologies: ["Agile"],
-                  platforms: ["AWS"],
-                  other: [],
-                }
-
-                toast({
-                  title: "Skills extraction limited",
-                  description: "We had trouble extracting all skills. Basic analysis will continue.",
-                  variant: "warning",
-                })
-              }
-
-              // Analyze the resume for other information
-              let analysisResult
-              try {
-                analysisResult = await analyzeResume(mockResumeText)
-
-                // Validate the result has the expected structure
-                if (!analysisResult || !analysisResult.skills) {
-                  console.error("Invalid analysis result structure:", analysisResult)
-                  throw new Error("Invalid analysis result structure")
-                }
-              } catch (analysisError) {
-                console.error("Error in resume analysis:", analysisError)
-
-                // Create a fallback analysis result
-                analysisResult = {
-                  skills: {
-                    technical: extractedSkills.technical || [],
-                    soft: extractedSkills.soft || [],
-                  },
-                  experience: [],
-                  education: [],
-                  summary: "Analysis could not be completed fully.",
-                  strengths: [],
-                  weaknesses: ["Resume analysis was incomplete due to technical issues."],
-                }
-
-                toast({
-                  title: "Analysis partially completed",
-                  description:
-                    "We encountered some issues analyzing your resume, but extracted the skills successfully.",
-                  variant: "warning",
-                })
-              }
-
-              // Combine the results
-              const enhancedAnalysis = {
-                ...analysisResult,
-                skills: {
-                  technical: [
-                    ...(analysisResult.skills.technical || []),
-                    ...(extractedSkills.technical || []),
-                    ...(extractedSkills.frameworks || []),
-                    ...(extractedSkills.languages || []),
-                    ...(extractedSkills.databases || []),
-                    ...(extractedSkills.tools || []),
-                    ...(extractedSkills.platforms || []),
-                  ].filter(
-                    (skill, index, self) =>
-                      skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-                  ),
-                  soft: analysisResult.skills.soft
-                    ? [
-                        ...(analysisResult.skills.soft || []),
-                        ...(extractedSkills.soft || []),
-                        ...(extractedSkills.methodologies || []),
-                      ].filter(
-                        (skill, index, self) =>
-                          skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
-                      )
-                    : [],
-                },
-                extractedSkills, // Add the full extracted skills data
-              }
-
-              // Store the analysis result using our session management
-              storeAnalysisResults(enhancedAnalysis, extractedSkills, mockResumeText)
-
-              SkillsLogger.logSkills(
-                enhancedAnalysis.skills.technical || [],
-                enhancedAnalysis.skills.soft || [],
-                `resume-file-${file.type}`,
-              )
-
-              setIsUploading(false)
-              onUpload({
-                type: "file",
-                data: {
-                  name: file.name,
-                  type: file.type,
-                  size: file.size,
-                },
-                analysis: enhancedAnalysis,
-              })
-
-              // Show more detailed toast with actual skills
-              toast({
-                title: "Resume analyzed successfully",
-                description: (
-                  <div className="space-y-1">
-                    <p>
-                      <strong>Technical skills:</strong>{" "}
-                      {formatSkillsList((enhancedAnalysis.skills.technical || []).slice(0, 5))}
-                      {enhancedAnalysis.skills.technical && enhancedAnalysis.skills.technical.length > 5
-                        ? ` and ${enhancedAnalysis.skills.technical.length - 5} more`
-                        : ""}
-                    </p>
-                    {enhancedAnalysis.skills.soft && enhancedAnalysis.skills.soft.length > 0 && (
-                      <p>
-                        <strong>Soft skills:</strong> {formatSkillsList(enhancedAnalysis.skills.soft.slice(0, 3))}
-                        {enhancedAnalysis.skills.soft.length > 3
-                          ? ` and ${enhancedAnalysis.skills.soft.length - 3} more`
-                          : ""}
-                      </p>
-                    )}
-                    <p>
-                      <strong>Work experiences:</strong> {(analysisResult.experience || []).length}
-                    </p>
-                  </div>
-                ),
-                duration: 5000, // Show for longer since there's more to read
-              })
-            } catch (error) {
-              setIsUploading(false)
-              console.error("Analysis error:", error)
-              setError(error.message || "Failed to analyze resume. Please try again.")
-              toast({
-                title: "Analysis failed",
-                description: error.message || "Failed to analyze resume. Please try again.",
-                variant: "destructive",
-              })
-            }
-          }
-
-          reader.onerror = () => {
-            setIsUploading(false)
-            setError("Could not read the file content. Please try again.")
-            toast({
-              title: "Error reading file",
-              description: "Could not read the file content. Please try again.",
-              variant: "destructive",
-            })
-          }
-
-          // Start reading the file
-          reader.readAsArrayBuffer(file)
-        }
-      } catch (error) {
+      // Validate the file
+      const validation = validateResumeFile(file)
+      if (!validation.valid) {
         setIsUploading(false)
-        console.error("Analysis error:", error)
-        setError(error.message || "Failed to analyze resume. Please")
+        setError(validation.message || "Invalid file")
+        toast({
+          title: "Invalid file",
+          description: validation.message,
+          variant: "destructive",
+        })
+        return
       }
+
+      // Set initial progress
+      setUploadProgress(10)
+
+      // Extract text from the file
+      let extractedText
+      try {
+        // Update progress to show we're starting extraction
+        setUploadProgress(20)
+
+        extractedText = await timeExecution(() => extractTextFromFile(file), "extractTextFromFile")
+        checkpoint("extractTextFromFile-complete", { textLength: extractedText.length })
+
+        // Clean and preprocess the extracted text
+        extractedText = cleanExtractedText(extractedText)
+
+        // Update progress after text extraction
+        setUploadProgress(40)
+
+        // Store the raw text for reference
+        storeCompatibleAnalysisData("resumeText", extractedText)
+      } catch (extractionError) {
+        logDetailedError(extractionError, "extractTextFromFile")
+        setIsUploading(false)
+        setUploadProgress(0)
+        setError("Failed to extract text from file")
+        toast({
+          title: "Text extraction failed",
+          description: "We couldn't read the content of your file. Please try another file or paste the text directly.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      // Extract skills using our LLM-based extractor
+      let extractedSkills
+      try {
+        // Update progress to show we're starting skill extraction
+        setUploadProgress(50)
+
+        extractedSkills = await timeExecution(() => extractSkills(extractedText, "resume"), "extractSkills")
+        checkpoint("extractSkills-complete", extractedSkills)
+
+        // Update progress after skill extraction
+        setUploadProgress(70)
+      } catch (skillsError) {
+        logDetailedError(skillsError, "extractSkills")
+        // Continue with default skills
+        extractedSkills = {
+          technical: [],
+          soft: [],
+          tools: [],
+          frameworks: [],
+          languages: [],
+          databases: [],
+          methodologies: [],
+          platforms: [],
+          other: [],
+        }
+      }
+
+      // Analyze the resume for other information
+      let analysisResult
+      try {
+        // Update progress to show we're starting resume analysis
+        setUploadProgress(80)
+
+        analysisResult = await timeExecution(() => analyzeResume(extractedText), "analyzeResume")
+        checkpoint("analyzeResume-complete", {
+          hasSkills: !!analysisResult?.skills,
+          technicalSkillsCount: analysisResult?.skills?.technical?.length || 0,
+        })
+
+        // Update progress after resume analysis
+        setUploadProgress(90)
+      } catch (analysisError) {
+        logDetailedError(analysisError, "analyzeResume")
+        // Create a fallback analysis result
+        analysisResult = {
+          skills: {
+            technical: extractedSkills.technical || [],
+            soft: extractedSkills.soft || [],
+          },
+          experience: [],
+          education: [],
+          summary: "Analysis could not be completed fully.",
+          strengths: [],
+          weaknesses: ["Resume analysis was incomplete due to technical issues."],
+        }
+      }
+
+      // Combine the results
+      const enhancedAnalysis = {
+        ...analysisResult,
+        skills: {
+          technical: [
+            ...(analysisResult.skills?.technical || []),
+            ...(extractedSkills.technical || []),
+            ...(extractedSkills.frameworks || []),
+            ...(extractedSkills.languages || []),
+            ...(extractedSkills.databases || []),
+            ...(extractedSkills.tools || []),
+            ...(extractedSkills.platforms || []),
+          ].filter(
+            (skill, index, self) => skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
+          ),
+          soft: [
+            ...(analysisResult.skills?.soft || []),
+            ...(extractedSkills.soft || []),
+            ...(extractedSkills.methodologies || []),
+          ].filter(
+            (skill, index, self) => skill && self.findIndex((s) => s.toLowerCase() === skill.toLowerCase()) === index,
+          ),
+        },
+        extractedSkills,
+      }
+
+      // Clean up skills to ensure proper categorization
+      const cleanedAnalysis = {
+        ...enhancedAnalysis,
+        skills: cleanupExtractedSkills({ skills: enhancedAnalysis.skills }).skills,
+      }
+
+      // Store the analysis result
+      const storageSuccess = storeAnalysisResults(cleanedAnalysis, extractedSkills, extractedText)
+      checkpoint("storeAnalysisResults", { success: storageSuccess })
+
+      // Log the skills
+      SkillsLogger.logSkills(
+        cleanedAnalysis.skills.technical || [],
+        cleanedAnalysis.skills.soft || [],
+        `resume-file-${file.type}`,
+      )
+
+      // Complete the progress
+      setUploadProgress(100)
+
+      // Short delay before completing to show 100% progress
+      setTimeout(() => {
+        setIsUploading(false)
+        onUpload({
+          type: "file",
+          data: {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            text: extractedText, // Include the extracted text
+          },
+          analysis: cleanedAnalysis,
+        })
+
+        // Show success toast
+        toast({
+          title: "Resume analyzed successfully",
+          description: (
+            <div className="space-y-1">
+              <p>
+                <strong>Technical skills:</strong>{" "}
+                {formatSkillsList((cleanedAnalysis.skills.technical || []).slice(0, 5))}
+                {cleanedAnalysis.skills.technical && cleanedAnalysis.skills.technical.length > 5
+                  ? ` and ${cleanedAnalysis.skills.technical.length - 5} more`
+                  : ""}
+              </p>
+              {cleanedAnalysis.skills.soft && cleanedAnalysis.skills.soft.length > 0 && (
+                <p>
+                  <strong>Soft skills:</strong> {formatSkillsList(cleanedAnalysis.skills.soft.slice(0, 3))}
+                  {cleanedAnalysis.skills.soft.length > 3 ? ` and ${cleanedAnalysis.skills.soft.length - 3} more` : ""}
+                </p>
+              )}
+              <p>
+                <strong>Work experiences:</strong> {(analysisResult.experience || []).length}
+              </p>
+            </div>
+          ),
+          duration: 5000,
+        })
+      }, 500)
+    } catch (error) {
+      setIsUploading(false)
+      setUploadProgress(0)
+      logDetailedError(error, "handleFileUpload-main")
+      setError(error.message || "Failed to analyze resume. Please try again.")
+      toast({
+        title: "Analysis failed",
+        description: error.message || "Failed to analyze resume. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleExtractedTextSubmit = () => {
+    if (!extractedText.trim()) {
+      toast({
+        title: "Empty Text",
+        description: "Please enter your resume text before submitting.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Process the extracted text using the existing file upload flow
+    setResumeText(extractedText)
+
+    // Create a synthetic file object for the extracted text
+    const syntheticFile = new File([extractedText], "extracted-text.txt", { type: "text/plain" })
+    setFile(syntheticFile)
+
+    // Submit the form to process the text
+    handleFileUpload({ preventDefault: () => {} })
+  }
+
+  const resetFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
+    setFile(null)
+    setUploadProgress(0)
+    setExtractedText("")
+    setShowExtractedText(false)
+    if (onFileSelect) {
+      onFileSelect(false)
     }
   }
 
   return (
     <div className="w-full">
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="mb-4">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
       <Tabs defaultValue="upload" className="w-full">
-        <TabsList>
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="upload">
             <Upload className="mr-2 h-4 w-4" />
             Upload Resume
@@ -812,12 +673,78 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
           <form onSubmit={handleFileUpload}>
             <div className="grid gap-4">
               <div className="space-y-2">
-                <Label htmlFor="resume">Resume File</Label>
-                <Input id="resume" type="file" onChange={handleFileChange} accept=".pdf,.docx,.txt" />
+                <Label htmlFor="resume">Step 1: Upload Resume File</Label>
+                <Input
+                  id="resume"
+                  type="file"
+                  onChange={handleFileChange}
+                  accept=".pdf,.docx,.txt"
+                  ref={fileInputRef}
+                />
+                {file && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-gray-500">
+                      Selected file: {file.name} ({(file.size / 1024).toFixed(1)} KB)
+                    </p>
+                    <Button variant="ghost" size="sm" onClick={resetFileInput} type="button">
+                      Clear
+                    </Button>
+                  </div>
+                )}
+
+                {/* Text extraction progress */}
+                {isExtracting && (
+                  <FileUploadProgress
+                    progress={extractionProgress}
+                    fileName={file?.name || ""}
+                    fileSize={file?.size || 0}
+                    status="Extracting text..."
+                  />
+                )}
+
+                {/* Show extracted text for review/edit */}
+                {showExtractedText && (
+                  <div className="mt-4 space-y-2">
+                    <Label htmlFor="extracted-text">Step 1.5: Review Extracted Text</Label>
+                    <Textarea
+                      id="extracted-text"
+                      value={extractedText}
+                      onChange={(e) => setExtractedText(e.target.value)}
+                      className="min-h-[200px]"
+                      placeholder="Extracted text will appear here. You can edit it if needed."
+                    />
+                  </div>
+                )}
+
+                {/* Upload progress bar */}
+                {isUploading && (
+                  <FileUploadProgress
+                    progress={uploadProgress}
+                    fileName={file?.name || ""}
+                    fileSize={file?.size || 0}
+                    status="Analyzing resume..."
+                  />
+                )}
               </div>
-              <Button disabled={isUploading} type="submit">
-                {isUploading ? "Uploading..." : "Upload and Analyze"}
-              </Button>
+
+              {showExtractedText ? (
+                <div className="flex justify-between">
+                  <Button type="button" variant="outline" onClick={resetFileInput} disabled={isUploading}>
+                    Clear
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleExtractedTextSubmit}
+                    disabled={isUploading || !extractedText.trim()}
+                  >
+                    Step 2: Analyze Text
+                  </Button>
+                </div>
+              ) : (
+                <Button disabled={isUploading || !file || isExtracting} type="submit">
+                  {isUploading ? "Analyzing..." : "Upload and Analyze"}
+                </Button>
+              )}
             </div>
           </form>
         </TabsContent>
@@ -834,14 +761,14 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
                   onChange={(e) => setLinkedinUrl(e.target.value)}
                 />
               </div>
-              <Button disabled={isUploading} type="submit">
+              <Button disabled={isUploading || !linkedinUrl} type="submit">
                 {isUploading ? "Analyzing..." : "Analyze LinkedIn Profile"}
               </Button>
             </div>
           </form>
         </TabsContent>
         <TabsContent value="text">
-          <form onSubmit={handleTextAnalysisOld}>
+          <form onSubmit={handleTextAnalysis}>
             <div className="grid gap-4">
               <div className="space-y-2">
                 <Label htmlFor="resume-text">Resume Text</Label>
@@ -850,9 +777,10 @@ export function ResumeUpload({ onUpload, onFileSelect }) {
                   placeholder="Paste your resume text here"
                   value={resumeText}
                   onChange={(e) => setResumeText(e.target.value)}
+                  className="min-h-[200px]"
                 />
               </div>
-              <Button disabled={isAnalyzing} type="submit">
+              <Button disabled={isAnalyzing || !resumeText} type="submit">
                 {isAnalyzing ? "Analyzing..." : "Analyze Text"}
               </Button>
             </div>

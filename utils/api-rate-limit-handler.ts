@@ -2,73 +2,118 @@
  * Utility for handling API rate limits with exponential backoff
  */
 
-type RetryOptions = {
-  maxRetries: number
-  initialDelayMs: number
-  maxDelayMs: number
-  backoffFactor: number
-}
+/**
+ * Check if an error is a rate limit error
+ * @param error Error to check
+ * @returns True if the error is a rate limit error
+ */
+export function isRateLimitError(error: any): boolean {
+  if (!error) return false
 
-const defaultOptions: RetryOptions = {
-  maxRetries: 3,
-  initialDelayMs: 1000,
-  maxDelayMs: 10000,
-  backoffFactor: 2,
+  const errorMessage = error.message || error.toString()
+  return (
+    errorMessage.includes("Rate limit") ||
+    errorMessage.includes("rate limit") ||
+    errorMessage.includes("429") ||
+    errorMessage.includes("Too Many Requests") ||
+    errorMessage.includes("tokens per minute") ||
+    errorMessage.includes("Please try again in")
+  )
 }
 
 /**
- * Executes a function with retry logic and exponential backoff
- * @param fn The async function to execute
- * @param options Retry configuration options
- * @returns The result of the function
+ * Retry a function with exponential backoff
+ * @param fn Function to retry
+ * @param options Retry options
+ * @returns Result of the function
  */
-export async function withRetry<T>(fn: () => Promise<T>, options: Partial<RetryOptions> = {}): Promise<T> {
-  const config = { ...defaultOptions, ...options }
-  let lastError: Error | null = null
-  let delay = config.initialDelayMs
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: {
+    maxRetries?: number
+    initialDelayMs?: number
+    maxDelayMs?: number
+    backoffFactor?: number
+  } = {},
+): Promise<T> {
+  const { maxRetries = 3, initialDelayMs = 1000, maxDelayMs = 10000, backoffFactor = 2 } = options
 
-  for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
+  let retries = 0
+  let delay = initialDelayMs
+
+  while (true) {
     try {
       return await fn()
     } catch (error) {
-      lastError = error as Error
+      retries++
 
-      // Check if it's a rate limit error
-      const isRateLimit =
-        error instanceof Error &&
-        (error.message.includes("Rate limit") ||
-          error.message.includes("429") ||
-          error.message.includes("Too Many Requests"))
-
-      if (attempt >= config.maxRetries || !isRateLimit) {
-        break
+      // Check if we've reached the maximum number of retries
+      if (retries > maxRetries) {
+        console.error(`Failed after ${maxRetries} attempts. Last error:`, error)
+        throw error
       }
 
-      console.warn(`Attempt ${attempt} failed, retrying in ${delay}ms...`, error)
+      // Check if this is a rate limit error
+      const isRateLimit = isRateLimitError(error)
+
+      // If it's not a rate limit error and we're not configured to retry other errors, throw
+      if (!isRateLimit) {
+        throw error
+      }
+
+      // Extract wait time from Groq error message if available
+      let waitTime = delay
+      if (isRateLimit && error instanceof Error) {
+        const waitTimeMatch = error.message.match(/Please try again in (\d+\.\d+)s/)
+        if (waitTimeMatch && waitTimeMatch[1]) {
+          // Get the wait time from the error message and add a buffer
+          waitTime = Math.ceil(Number.parseFloat(waitTimeMatch[1]) * 1000) + 1000 // Add 1 second buffer
+          console.log(`Extracted wait time from error message: ${waitTime}ms`)
+        }
+      }
+
+      // Cap the wait time at maxDelayMs
+      waitTime = Math.min(waitTime, maxDelayMs)
+
+      console.log(`Attempt ${retries} failed, retrying in ${waitTime}ms...`)
 
       // Wait before retrying
-      await new Promise((resolve) => setTimeout(resolve, delay))
+      await new Promise((resolve) => setTimeout(resolve, waitTime))
 
-      // Increase delay for next attempt with exponential backoff
-      delay = Math.min(delay * config.backoffFactor, config.maxDelayMs)
+      // Increase the delay for the next retry (exponential backoff)
+      delay = Math.min(delay * backoffFactor, maxDelayMs)
     }
   }
-
-  throw new Error(`Failed after ${config.maxRetries} attempts. Last error: ${lastError?.message}`)
 }
 
 /**
- * Checks if an error is related to rate limiting
- * @param error The error to check
- * @returns True if it's a rate limit error
+ * Delays execution for a specified time
+ * @param ms Time to delay in milliseconds
+ * @returns Promise that resolves after the delay
  */
-export function isRateLimitError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
-  return (
-    error.message.includes("Rate limit") ||
-    error.message.includes("429") ||
-    error.message.includes("Too Many Requests") ||
-    error.message.includes("tokens per minute")
-  )
+/**
+ * Executes a batch of functions with rate limiting
+ * @param fns Array of functions to execute
+ * @param concurrency Maximum number of concurrent executions
+ * @param delayMs Delay between batches in milliseconds
+ * @returns Array of results
+ */
+export async function batchExecute<T>(fns: (() => Promise<T>)[], concurrency = 2, delayMs = 1000): Promise<T[]> {
+  const results: T[] = []
+
+  for (let i = 0; i < fns.length; i += concurrency) {
+    const batch = fns.slice(i, i + concurrency)
+    const batchResults = await Promise.all(batch.map((fn) => withRetry(fn)))
+    results.push(...batchResults)
+
+    if (i + concurrency < fns.length) {
+      await delay(delayMs)
+    }
+  }
+
+  return results
 }
