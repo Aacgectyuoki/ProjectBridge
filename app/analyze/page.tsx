@@ -9,14 +9,10 @@ import { Progress } from "@/components/ui/progress"
 import { ArrowRight, FileText, FileCode, AlertCircle, RefreshCw } from "lucide-react"
 import { SkillsGapAnalysis } from "@/components/skills-gap-analysis"
 import { generateProjectIdeas } from "@/app/actions/generate-project-ideas"
-import {
-  analyzeSkillsGapFromResults,
-  SkillsGapAnalysisError,
-  SkillsGapAnalysisErrorType,
-} from "@/app/actions/analyze-skills-gap"
+import { analyzeSkillsGapFromResults, type SkillGapAnalysisResult } from "@/app/actions/analyze-skills-gap"
+import { SkillsGapAnalysisError, SkillsGapAnalysisErrorType } from "@/types/skills-gap-analysis-error"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
-import type { SkillGapAnalysisResult } from "@/app/actions/analyze-skills-gap"
 import {
   getCompatibleAnalysisData,
   storeCompatibleAnalysisData,
