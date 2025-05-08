@@ -5,6 +5,7 @@ import type { ResumeAnalysisResult } from "./analyze-resume"
 import type { JobAnalysisResult } from "./analyze-job-description"
 import { generateText } from "ai"
 import { groq } from "@ai-sdk/groq"
+import { handleError, ErrorCategory, ErrorSeverity, withRetryAndErrorHandling } from "@/utils/error-handler"
 
 export type SkillGapAnalysisResult = {
   matchPercentage: number
@@ -36,6 +37,28 @@ export type SkillGapAnalysisResult = {
     priority: string
   }[]
   summary: string
+}
+
+// Error types specific to skills gap analysis
+export enum SkillsGapAnalysisErrorType {
+  INSUFFICIENT_DATA = "insufficient_data",
+  API_ERROR = "api_error",
+  PARSING_ERROR = "parsing_error",
+  VALIDATION_ERROR = "validation_error",
+  UNKNOWN_ERROR = "unknown_error",
+}
+
+// Custom error class for skills gap analysis errors
+export class SkillsGapAnalysisError extends Error {
+  type: SkillsGapAnalysisErrorType
+  details?: any
+
+  constructor(message: string, type: SkillsGapAnalysisErrorType, details?: any) {
+    super(message)
+    this.name = "SkillsGapAnalysisError"
+    this.type = type
+    this.details = details
+  }
 }
 
 // Default empty structure to ensure consistent shape
@@ -75,6 +98,7 @@ export async function analyzeSkillsGapFromResults(
         const parsedAnalysis = JSON.parse(cachedAnalysis)
         return parsedAnalysis
       } catch (e) {
+        handleError(e as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: false })
         console.error("Failed to parse cached analysis:", e)
         // Continue with generating a new analysis
       }
@@ -83,6 +107,19 @@ export async function analyzeSkillsGapFromResults(
         "No skillGapAnalysis data found in session",
         typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
       )
+    }
+
+    // Validate input data
+    if (!resumeAnalysis || !jobAnalysis) {
+      const error = new SkillsGapAnalysisError(
+        "Missing resume or job analysis data",
+        SkillsGapAnalysisErrorType.INSUFFICIENT_DATA,
+        { resumeAnalysis, jobAnalysis },
+      )
+
+      handleError(error, ErrorCategory.DATA_PARSING, ErrorSeverity.ERROR)
+
+      return defaultSkillGapAnalysisResult
     }
 
     // Prepare the data for the prompt
@@ -101,6 +138,14 @@ export async function analyzeSkillsGapFromResults(
 
     // If we don't have enough data, return the default result
     if (!hasResumeSkills || !hasJobSkills) {
+      const error = new SkillsGapAnalysisError(
+        "Insufficient data for skills gap analysis",
+        SkillsGapAnalysisErrorType.INSUFFICIENT_DATA,
+        { hasResumeSkills, hasJobSkills },
+      )
+
+      handleError(error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: true })
+
       console.log("Insufficient data for skills gap analysis, returning default result")
       return defaultSkillGapAnalysisResult
     }
@@ -186,13 +231,24 @@ export async function analyzeSkillsGapFromResults(
     `
 
     try {
-      // Generate the analysis
-      const { text: responseText } = await generateText({
-        model: groq("llama3-70b-8192"),
-        prompt,
-        temperature: 0.2,
-        maxTokens: 2048,
-      })
+      // Generate the analysis with retry and error handling
+      const { text: responseText } = await withRetryAndErrorHandling(
+        async () => {
+          return await generateText({
+            model: groq("llama3-70b-8192"),
+            prompt,
+            temperature: 0.2,
+            maxTokens: 2048,
+          })
+        },
+        {
+          category: ErrorCategory.API,
+          maxRetries: 3,
+          onRetry: (attempt, error) => {
+            console.warn(`AI request attempt ${attempt} failed: ${error.message}. Retrying...`)
+          },
+        },
+      )
 
       console.log("Raw AI response (first 200 chars):", responseText.substring(0, 200) + "...")
 
@@ -211,6 +267,9 @@ export async function analyzeSkillsGapFromResults(
         cleanedResponse = cleanedResponse.substring(0, lastBrace + 1)
       }
 
+      // Apply enhanced JSON repair to fix common issues, especially missing colons
+      cleanedResponse = fixMissingColons(cleanedResponse)
+
       // Try direct parsing first with a try/catch
       try {
         const directParsed = JSON.parse(cleanedResponse)
@@ -228,7 +287,9 @@ export async function analyzeSkillsGapFromResults(
 
         return validatedResult
       } catch (directParseError) {
-        console.error("Direct JSON parse failed:", directParseError.message)
+        handleError(directParseError as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: false })
+
+        console.error("Direct JSON parse failed:", (directParseError as Error).message)
         // Continue to enhanced parsing
       }
 
@@ -237,6 +298,14 @@ export async function analyzeSkillsGapFromResults(
 
       // If parsing completely fails, return the default result
       if (!result || Object.keys(result).length === 0) {
+        const error = new SkillsGapAnalysisError(
+          "Failed to parse AI response as JSON",
+          SkillsGapAnalysisErrorType.PARSING_ERROR,
+          { responseText: responseText.substring(0, 500) + "..." },
+        )
+
+        handleError(error, ErrorCategory.DATA_PARSING, ErrorSeverity.ERROR)
+
         console.error("Failed to parse AI response as JSON, returning default result")
         return defaultSkillGapAnalysisResult
       }
@@ -253,19 +322,58 @@ export async function analyzeSkillsGapFromResults(
 
       return validatedResult
     } catch (error) {
-      console.error("Error generating or parsing AI response:", error)
+      const skillsGapError = new SkillsGapAnalysisError(
+        "Error generating or parsing AI response",
+        SkillsGapAnalysisErrorType.API_ERROR,
+        error,
+      )
+
+      handleError(skillsGapError, ErrorCategory.API, ErrorSeverity.ERROR)
 
       // Provide more detailed error information
-      if (error.message && error.message.includes("position")) {
-        console.error("JSON parse error details:", error.message)
+      if ((error as Error).message && (error as Error).message.includes("position")) {
+        console.error("JSON parse error details:", (error as Error).message)
       }
 
       return defaultSkillGapAnalysisResult
     }
   } catch (error) {
-    console.error("Error analyzing skills gap:", error)
+    const skillsGapError = new SkillsGapAnalysisError(
+      "Error analyzing skills gap",
+      SkillsGapAnalysisErrorType.UNKNOWN_ERROR,
+      error,
+    )
+
+    handleError(skillsGapError, ErrorCategory.UNKNOWN, ErrorSeverity.ERROR)
+
     return defaultSkillGapAnalysisResult
   }
+}
+
+// Helper function to fix missing colons in JSON
+function fixMissingColons(json: string): string {
+  // Find property names that aren't followed by a colon
+  let result = json.replace(/("(?:\\.|[^"\\])*")(\s*)([^:\s,}])/g, "$1:$2$3")
+
+  // Specifically target property names followed by another property name (missing colon between them)
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)("(?:\\.|[^"\\])*")\s*:/g, "$1: $3:")
+
+  // Fix property names followed by an array without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\[)/g, "$1: $3")
+
+  // Fix property names followed by an object without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\{)/g, "$1: $3")
+
+  // Fix property names followed by numbers without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\d+)/g, "$1: $3")
+
+  // Fix property names followed by boolean values without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(true|false)/g, "$1: $3")
+
+  // Fix property names followed by null without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(null)/g, "$1: $3")
+
+  return result
 }
 
 /**
@@ -331,6 +439,8 @@ function ensureValidStructure(result: any): SkillGapAnalysisResult {
 
     return validatedResult
   } catch (error) {
+    handleError(error as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.ERROR, { notifyUser: false })
+
     console.error("Error validating result structure:", error)
     return defaultSkillGapAnalysisResult
   }

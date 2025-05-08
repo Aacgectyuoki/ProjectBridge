@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { processFile } from "@/utils/file-processor"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { processFile, FileProcessingError } from "@/utils/file-processor"
 import { Progress } from "@/components/ui/progress"
 import {
   Upload,
@@ -21,7 +21,10 @@ import {
   Lock,
   ImageIcon,
   Scan,
+  RefreshCw,
 } from "lucide-react"
+import { handleError, ErrorCategory, ErrorSeverity } from "@/utils/error-handler"
+import { ErrorBoundary } from "./error-boundary"
 
 interface ResumeUploadProps {
   onUpload?: (text: string) => void
@@ -37,7 +40,7 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressStage, setProgressStage] = useState("")
-  const [error, setError] = useState("")
+  const [error, setError] = useState<{ message: string; type?: string } | null>(null)
   const [showExtractionTip, setShowExtractionTip] = useState(false)
   const [isEncryptedPDF, setIsEncryptedPDF] = useState(false)
   const [isScannedPDF, setIsScannedPDF] = useState(false)
@@ -52,7 +55,7 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
     setIsProcessing(true)
     setProgress(0)
     setProgressStage("Starting")
-    setError("")
+    setError(null)
     setExtractedText("")
     setShowExtractionTip(false)
     setIsEncryptedPDF(false)
@@ -86,7 +89,12 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
         }
 
         if (data.error) {
-          setError(data.error.message || "Error processing file")
+          handleError(data.error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+
+          setError({
+            message: data.error.message || "Error processing file",
+            type: data.error instanceof FileProcessingError ? data.error.type : undefined,
+          })
         }
       })
 
@@ -107,8 +115,15 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
         onTextExtracted(text)
       }
     } catch (error) {
+      handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: true })
+
       console.error("Error processing file:", error)
-      setError(error.message || "Error processing file")
+
+      setError({
+        message: (error as Error).message || "Error processing file",
+        type: error instanceof FileProcessingError ? error.type : undefined,
+      })
+
       setIsProcessing(false)
       setIsPerformingOCR(false)
     }
@@ -118,7 +133,7 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
     const textToProcess = activeTab === "upload" ? extractedText : manualText
 
     if (!textToProcess.trim()) {
-      setError("Please enter text before submitting")
+      setError({ message: "Please enter text before submitting" })
       return
     }
 
@@ -133,13 +148,26 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
     }
 
     // Clear any previous errors
-    setError("")
+    setError(null)
   }
 
   const handleChooseFile = () => {
     if (fileInputRef.current) {
       fileInputRef.current.click()
     }
+  }
+
+  const handleRetry = () => {
+    setError(null)
+    setFile(null)
+    setExtractedText("")
+    setIsProcessing(false)
+    setProgress(0)
+    setProgressStage("")
+    setShowExtractionTip(false)
+    setIsEncryptedPDF(false)
+    setIsScannedPDF(false)
+    setIsPerformingOCR(false)
   }
 
   // Get file icon based on file type
@@ -178,134 +206,149 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
   }
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <FileText className="h-5 w-5" />
-          Upload Resume
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="upload">Upload File</TabsTrigger>
-            <TabsTrigger value="paste">Paste Text</TabsTrigger>
-          </TabsList>
+    <ErrorBoundary>
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Upload Resume
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="upload">Upload File</TabsTrigger>
+              <TabsTrigger value="paste">Paste Text</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="upload" className="space-y-4 pt-4">
-            <div>
-              <h2 className="text-sm font-medium mb-2">Step 1: Upload your resume file or paste text</h2>
-              <div className="flex items-center gap-2">
-                <Button
-                  onClick={handleChooseFile}
-                  variant="secondary"
-                  disabled={isProcessing}
-                  className="flex items-center gap-2"
-                >
-                  <Upload className="h-4 w-4" />
-                  Choose File
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-                {file && (
-                  <span className="text-sm text-gray-500 flex items-center gap-1">
-                    {getFileIcon()}
-                    {file.name}
-                    {isEncryptedPDF && <span className="ml-1 text-amber-500">(Secured PDF)</span>}
-                    {isScannedPDF && <span className="ml-1 text-amber-500">(Scanned PDF)</span>}
-                  </span>
+            <TabsContent value="upload" className="space-y-4 pt-4">
+              <div>
+                <h2 className="text-sm font-medium mb-2">Step 1: Upload your resume file or paste text</h2>
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={handleChooseFile}
+                    variant="secondary"
+                    disabled={isProcessing}
+                    className="flex items-center gap-2"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Choose File
+                  </Button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  {file && (
+                    <span className="text-sm text-gray-500 flex items-center gap-1">
+                      {getFileIcon()}
+                      {file.name}
+                      {isEncryptedPDF && <span className="ml-1 text-amber-500">(Secured PDF)</span>}
+                      {isScannedPDF && <span className="ml-1 text-amber-500">(Scanned PDF)</span>}
+                    </span>
+                  )}
+                </div>
+
+                {isProcessing && (
+                  <div className="mt-4 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className={`capitalize ${isPerformingOCR ? "text-blue-600 font-medium" : ""}`}>
+                        {isPerformingOCR ? "Performing OCR: " : ""}
+                        {formatProgressStage(progressStage)}
+                      </span>
+                      <span>{progress}%</span>
+                    </div>
+                    <Progress
+                      value={progress}
+                      className={`h-2 ${isPerformingOCR ? "bg-blue-100" : ""}`}
+                      indicatorClassName={isPerformingOCR ? "bg-blue-600" : undefined}
+                    />
+                    {isPerformingOCR && (
+                      <p className="text-xs text-blue-600">
+                        Performing Optical Character Recognition to extract text from scanned document...
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {error && (
+                  <Alert variant="destructive" className="mt-4">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription className="space-y-2">
+                      <p>{error.message}</p>
+                      {error.type && <p className="text-xs opacity-80">Error type: {error.type}</p>}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRetry}
+                        className="mt-2 bg-transparent border-red-300 text-red-700 hover:bg-red-50"
+                      >
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                        Try Again
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {showExtractionTip && (
+                  <Alert variant="default" className="mt-4 bg-blue-50 border-blue-200">
+                    <Info className="h-4 w-4 text-blue-500" />
+                    <AlertDescription className="text-blue-700">
+                      <p className="font-medium">PDF Extraction Tips:</p>
+                      <ul className="list-disc pl-5 mt-1 text-sm">
+                        <li>Some PDFs contain scanned images rather than text</li>
+                        <li>Security settings may prevent text extraction</li>
+                        <li>Try copying text directly from your PDF viewer</li>
+                        <li>For best results, use a text-based PDF or Word document</li>
+                      </ul>
+                    </AlertDescription>
+                  </Alert>
                 )}
               </div>
 
-              {isProcessing && (
-                <div className="mt-4 space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className={`capitalize ${isPerformingOCR ? "text-blue-600 font-medium" : ""}`}>
-                      {isPerformingOCR ? "Performing OCR: " : ""}
-                      {formatProgressStage(progressStage)}
-                    </span>
-                    <span>{progress}%</span>
-                  </div>
-                  <Progress
-                    value={progress}
-                    className={`h-2 ${isPerformingOCR ? "bg-blue-100" : ""}`}
-                    indicatorClassName={isPerformingOCR ? "bg-blue-600" : undefined}
+              {extractedText && (
+                <div>
+                  <h2 className="text-sm font-medium mb-2">Step 1.5: Review or edit extracted text</h2>
+                  <Textarea
+                    value={extractedText}
+                    onChange={(e) => setExtractedText(e.target.value)}
+                    className="min-h-[200px]"
+                    placeholder="Extracted text will appear here"
                   />
-                  {isPerformingOCR && (
-                    <p className="text-xs text-blue-600">
-                      Performing Optical Character Recognition to extract text from scanned document...
-                    </p>
-                  )}
                 </div>
               )}
+            </TabsContent>
 
-              {error && (
-                <Alert variant="destructive" className="mt-4">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-
-              {showExtractionTip && (
-                <Alert variant="default" className="mt-4 bg-blue-50 border-blue-200">
-                  <Info className="h-4 w-4 text-blue-500" />
-                  <AlertDescription className="text-blue-700">
-                    <p className="font-medium">PDF Extraction Tips:</p>
-                    <ul className="list-disc pl-5 mt-1 text-sm">
-                      <li>Some PDFs contain scanned images rather than text</li>
-                      <li>Security settings may prevent text extraction</li>
-                      <li>Try copying text directly from your PDF viewer</li>
-                      <li>For best results, use a text-based PDF or Word document</li>
-                    </ul>
-                  </AlertDescription>
-                </Alert>
-              )}
-            </div>
-
-            {extractedText && (
+            <TabsContent value="paste" className="space-y-4 pt-4">
               <div>
-                <h2 className="text-sm font-medium mb-2">Step 1.5: Review or edit extracted text</h2>
+                <h2 className="text-sm font-medium mb-2">Step 1: Paste your resume text</h2>
                 <Textarea
-                  value={extractedText}
-                  onChange={(e) => setExtractedText(e.target.value)}
+                  value={manualText}
+                  onChange={(e) => setManualText(e.target.value)}
                   className="min-h-[200px]"
-                  placeholder="Extracted text will appear here"
+                  placeholder="Paste your resume text here"
                 />
               </div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="paste" className="space-y-4 pt-4">
-            <div>
-              <h2 className="text-sm font-medium mb-2">Step 1: Paste your resume text</h2>
-              <Textarea
-                value={manualText}
-                onChange={(e) => setManualText(e.target.value)}
-                className="min-h-[200px]"
-                placeholder="Paste your resume text here"
-              />
-            </div>
-          </TabsContent>
-        </Tabs>
-      </CardContent>
-      <CardFooter>
-        <Button
-          onClick={handleTextSubmit}
-          className="w-full"
-          disabled={
-            (activeTab === "upload" && (!extractedText.trim() || isProcessing)) ||
-            (activeTab === "paste" && !manualText.trim())
-          }
-        >
-          <CheckCircle className="mr-2 h-4 w-4" />
-          Step 2: Analyze Text
-        </Button>
-      </CardFooter>
-    </Card>
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+        <CardFooter>
+          <Button
+            onClick={handleTextSubmit}
+            className="w-full"
+            disabled={
+              (activeTab === "upload" && (!extractedText.trim() || isProcessing)) ||
+              (activeTab === "paste" && !manualText.trim())
+            }
+          >
+            <CheckCircle className="mr-2 h-4 w-4" />
+            Step 2: Analyze Text
+          </Button>
+        </CardFooter>
+      </Card>
+    </ErrorBoundary>
   )
 }

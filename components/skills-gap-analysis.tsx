@@ -13,6 +13,8 @@ interface SkillsGapAnalysisProps {
 }
 
 export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
+  console.log("Analysis data received:", analysis)
+
   if (!analysis) return null
 
   // Ensure we have valid data with fallbacks
@@ -26,6 +28,8 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
     recommendations: Array.isArray(analysis.recommendations) ? analysis.recommendations : [],
     summary: analysis.summary || "Analysis could not be completed. Please try again.",
   }
+
+  console.log("Safe analysis data:", safeAnalysis)
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
@@ -84,7 +88,7 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
                   Skills You Have
                 </h3>
                 <div className="space-y-2">
-                  {safeAnalysis.matchedSkills.length > 0 ? (
+                  {safeAnalysis.matchedSkills && safeAnalysis.matchedSkills.length > 0 ? (
                     safeAnalysis.matchedSkills.map((skill, index) => (
                       <div key={index} className="flex justify-between items-center text-sm p-2 bg-green-50 rounded">
                         <span className="font-medium">{skill.name}</span>
@@ -109,7 +113,7 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
                   Skills You Need
                 </h3>
                 <div className="space-y-2">
-                  {safeAnalysis.missingSkills.length > 0 ? (
+                  {safeAnalysis.missingSkills && safeAnalysis.missingSkills.length > 0 ? (
                     safeAnalysis.missingSkills.map((skill, index) => (
                       <div
                         key={index}

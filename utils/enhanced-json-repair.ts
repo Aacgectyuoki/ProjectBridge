@@ -124,7 +124,7 @@ function multiStageJSONRepair(text: string): string {
   // Stage 2: Fix array syntax issues
   result = fixArraySyntaxIssues(result)
 
-  // Stage 3: Fix missing colons
+  // Stage 3: Fix missing colons - ENHANCED to better handle the specific error
   result = fixMissingColons(result)
 
   // Stage 4: Fix property name and value issues
@@ -656,8 +656,30 @@ function aggressiveJSONRepair(jsonString: string): string {
 
 // Add a new function to specifically fix missing colons
 function fixMissingColons(json: string): string {
+  // Enhanced version to better handle the specific error at position 100 (line 6 column 21)
+
   // Find property names that aren't followed by a colon
-  return json.replace(/("(?:\\.|[^"\\])*")(\s*)([^:\s,}])/g, "$1:$2$3")
+  let result = json.replace(/("(?:\\.|[^"\\])*")(\s*)([^:\s,}])/g, "$1:$2$3")
+
+  // Specifically target property names followed by another property name (missing colon between them)
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)("(?:\\.|[^"\\])*")\s*:/g, "$1: $3:")
+
+  // Fix property names followed by an array without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\[)/g, "$1: $3")
+
+  // Fix property names followed by an object without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\{)/g, "$1: $3")
+
+  // Fix property names followed by numbers without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\d+)/g, "$1: $3")
+
+  // Fix property names followed by boolean values without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(true|false)/g, "$1: $3")
+
+  // Fix property names followed by null without a colon
+  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(null)/g, "$1: $3")
+
+  return result
 }
 
 /**
@@ -673,9 +695,13 @@ function fixPositionSpecificIssue(json: string, position: number, errorMsg: stri
     console.log(`JSON error context around position ${position}: "${context}"`)
 
     // Check for specific error patterns
-    if (errorMsg.includes("Expected ',' or ']' after array element")) {
+    if (errorMsg.includes("Expected ':' after property name")) {
       // This is the specific error we're seeing in the current case
+      // Insert a colon at the position
+      return json.substring(0, position) + ":" + json.substring(position)
+    }
 
+    if (errorMsg.includes("Expected ',' or ']' after array element")) {
       // Check if we're at the end of an object inside an array
       const beforeError = json.substring(Math.max(0, position - 100), position)
       const afterError = json.substring(position, Math.min(json.length, position + 100))
@@ -705,16 +731,6 @@ function fixPositionSpecificIssue(json: string, position: number, errorMsg: stri
     }
 
     // Handle other error types
-    if (errorMsg.includes("Expected ':' after property name")) {
-      // Missing colon after property name
-      return json.substring(0, position) + ":" + json.substring(position)
-    }
-
-    if (errorMsg.includes("Expected ',' or '}'")) {
-      // Missing comma in object
-      return json.substring(0, position) + "," + json.substring(position)
-    }
-
     if (errorMsg.includes("Expected property name or '}'")) {
       // Unexpected character where property name should be
       return json.substring(0, position) + "}" + json.substring(position)

@@ -149,14 +149,6 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <header className="border-b">
-        <div className="container flex h-16 items-center px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-2 font-bold text-xl">
-            <Code className="h-6 w-6" />
-            <span>ProjectBridge</span>
-          </Link>
-        </div>
-      </header>
       <main className="flex-1 container py-8">
         <div className="mx-auto max-w-4xl">
           <div className="flex justify-between items-center mb-8">

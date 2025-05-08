@@ -1,6 +1,7 @@
 import { cleanExtractedText } from "./text-preprocessor"
 import type { ProgressCallback } from "@/types/file-processing"
 import { extractTextFromPDF, extractPDFMetadata, isPDFScanned, isPDFEncrypted } from "./pdf-text-extractor"
+import { handleError, ErrorCategory, ErrorSeverity } from "./error-handler"
 
 // Maximum file size in bytes (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024
@@ -16,12 +17,44 @@ const SUPPORTED_FILE_TYPES = [
 ]
 
 /**
+ * Error types specific to file processing
+ */
+export enum FileProcessingErrorType {
+  FILE_TOO_LARGE = "file_too_large",
+  UNSUPPORTED_TYPE = "unsupported_type",
+  ENCRYPTED_PDF = "encrypted_pdf",
+  EXTRACTION_FAILED = "extraction_failed",
+  INVALID_FILE = "invalid_file",
+  SCANNED_DOCUMENT = "scanned_document",
+  OCR_FAILED = "ocr_failed",
+}
+
+/**
+ * Custom error class for file processing errors
+ */
+export class FileProcessingError extends Error {
+  type: FileProcessingErrorType
+  details?: any
+
+  constructor(message: string, type: FileProcessingErrorType, details?: any) {
+    super(message)
+    this.name = "FileProcessingError"
+    this.type = type
+    this.details = details
+  }
+}
+
+/**
  * Validates a file
  */
-export function validateFile(file: File): { valid: boolean; message?: string } {
+export function validateFile(file: File): { valid: boolean; message?: string; errorType?: FileProcessingErrorType } {
   // Check if file exists
   if (!file) {
-    return { valid: false, message: "No file selected" }
+    return {
+      valid: false,
+      message: "No file selected",
+      errorType: FileProcessingErrorType.INVALID_FILE,
+    }
   }
 
   // Check file size
@@ -29,6 +62,7 @@ export function validateFile(file: File): { valid: boolean; message?: string } {
     return {
       valid: false,
       message: `File size exceeds the maximum limit of ${MAX_FILE_SIZE / (1024 * 1024)}MB`,
+      errorType: FileProcessingErrorType.FILE_TOO_LARGE,
     }
   }
 
@@ -37,6 +71,7 @@ export function validateFile(file: File): { valid: boolean; message?: string } {
     return {
       valid: false,
       message: `Unsupported file type. Please upload a PDF, DOCX, or TXT file`,
+      errorType: FileProcessingErrorType.UNSUPPORTED_TYPE,
     }
   }
 
@@ -49,13 +84,24 @@ export function validateFile(file: File): { valid: boolean; message?: string } {
 export async function processFile(file: File, onProgress?: ProgressCallback): Promise<string> {
   try {
     if (!file) {
-      throw new Error("No file provided")
+      const error = new FileProcessingError("No file provided", FileProcessingErrorType.INVALID_FILE)
+
+      handleError(error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.WARNING)
+
+      throw error
     }
 
     // Validate file
     const validation = validateFile(file)
     if (!validation.valid) {
-      throw new Error(validation.message || "Invalid file")
+      const error = new FileProcessingError(
+        validation.message || "Invalid file",
+        validation.errorType || FileProcessingErrorType.INVALID_FILE,
+      )
+
+      handleError(error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.WARNING)
+
+      throw error
     }
 
     // Report starting
@@ -72,6 +118,19 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
         const isEncrypted = await isPDFEncrypted(file)
         if (isEncrypted) {
           if (onProgress) onProgress({ stage: "detected encrypted pdf", progress: 20 })
+
+          const error = new FileProcessingError(
+            "This PDF appears to be secured or encrypted. Security settings may prevent text extraction.",
+            FileProcessingErrorType.ENCRYPTED_PDF,
+          )
+
+          handleError(
+            error,
+            ErrorCategory.FILE_PROCESSING,
+            ErrorSeverity.WARNING,
+            { notifyUser: false }, // Don't notify user since we'll show a specific message
+          )
+
           extractedText = `This PDF appears to be secured or encrypted. Security settings may prevent text extraction. Please try:
 1. Opening the PDF in a desktop viewer and enabling text copying
 2. Providing an unlocked version of the document
@@ -89,15 +148,24 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
           // For scanned PDFs, we'll attempt OCR
           if (onProgress) onProgress({ stage: "preparing ocr", progress: 30 })
 
-          // Use our enhanced PDF extractor with OCR enabled
-          if (onProgress) onProgress({ stage: "performing ocr", progress: 40 })
-          extractedText = await extractTextFromPDF(file, {
-            attemptMultipleStrategies: true,
-            extractMetadata: true,
-            attemptOCR: true,
-          })
+          try {
+            // Use our enhanced PDF extractor with OCR enabled
+            if (onProgress) onProgress({ stage: "performing ocr", progress: 40 })
+            extractedText = await extractTextFromPDF(file, {
+              attemptMultipleStrategies: true,
+              extractMetadata: true,
+              attemptOCR: true,
+            })
 
-          if (onProgress) onProgress({ stage: "processing ocr results", progress: 80 })
+            if (onProgress) onProgress({ stage: "processing ocr results", progress: 80 })
+          } catch (ocrError) {
+            handleError(ocrError as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.WARNING, { notifyUser: false })
+
+            extractedText = `OCR processing failed for this scanned document. Please try:
+1. Using a clearer scan of the document
+2. Copying the text directly from your PDF viewer (if it has built-in OCR)
+3. Providing a text-based PDF or Word document instead`
+          }
         } else {
           // Try to extract metadata
           if (onProgress) onProgress({ stage: "extracting metadata", progress: 30 })
@@ -123,8 +191,9 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
 
         if (onProgress) onProgress({ stage: "processing", progress: 70 })
       } catch (error) {
-        console.error("PDF extraction error:", error)
-        extractedText = `PDF extraction encountered an error: ${error.message}. Please paste the text content directly.`
+        handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+
+        extractedText = `PDF extraction encountered an error: ${(error as Error).message}. Please paste the text content directly.`
       }
 
       if (onProgress) onProgress({ stage: "processing", progress: 90 })
@@ -133,7 +202,17 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
 
       try {
         // Import mammoth.js dynamically
-        const mammoth = await import("mammoth")
+        const mammoth = await import("mammoth").catch((error) => {
+          handleError(error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+          return null
+        })
+
+        if (!mammoth) {
+          throw new FileProcessingError(
+            "Failed to load document processing library",
+            FileProcessingErrorType.EXTRACTION_FAILED,
+          )
+        }
 
         if (onProgress) onProgress({ stage: "reading docx", progress: 30 })
 
@@ -146,8 +225,9 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
         const result = await mammoth.extractRawText({ arrayBuffer })
         extractedText = result.value
       } catch (error) {
-        console.error("DOCX extraction error:", error)
-        extractedText = `DOCX extraction encountered an error: ${error.message}. Please paste the text content directly.`
+        handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+
+        extractedText = `DOCX extraction encountered an error: ${(error as Error).message}. Please paste the text content directly.`
       }
 
       if (onProgress) onProgress({ stage: "processing", progress: 90 })
@@ -159,7 +239,14 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
         if (onProgress) onProgress({ stage: "preparing ocr", progress: 40 })
 
         // Extract text using OCR
-        const { extractTextFromImage } = await import("./tesseract-ocr")
+        const { extractTextFromImage } = await import("./tesseract-ocr").catch((error) => {
+          handleError(error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+          return { extractTextFromImage: null }
+        })
+
+        if (!extractTextFromImage) {
+          throw new FileProcessingError("Failed to load OCR library", FileProcessingErrorType.OCR_FAILED)
+        }
 
         if (onProgress) onProgress({ stage: "performing ocr", progress: 50 })
 
@@ -183,7 +270,8 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
           extractedText = `Image OCR produced limited results. The file "${file.name}" was processed, but text extraction from images may be incomplete. Please paste the text content directly if needed.`
         }
       } catch (error) {
-        console.error("Image OCR error:", error)
+        handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+
         extractedText = `Image processing is limited in this environment. The file "${file.name}" was uploaded successfully, but text extraction from images requires additional libraries. Please paste the text content directly.`
       }
 
@@ -191,8 +279,14 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
     } else if (file.type === "text/plain") {
       if (onProgress) onProgress({ stage: "reading", progress: 30 })
 
-      // For text files, read as text
-      extractedText = await readFileAsText(file)
+      try {
+        // For text files, read as text
+        extractedText = await readFileAsText(file)
+      } catch (error) {
+        handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+
+        extractedText = `Failed to read text file: ${(error as Error).message}. Please paste the content directly.`
+      }
 
       if (onProgress) onProgress({ stage: "processing", progress: 70 })
     } else {
@@ -202,6 +296,8 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
       try {
         extractedText = await readFileAsText(file)
       } catch (error) {
+        handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: false })
+
         extractedText = `Unsupported file type: ${file.type}. Please upload a PDF, DOCX, or text file, or paste the content directly.`
       }
 
@@ -226,7 +322,17 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
       })
     }
 
-    throw error
+    // If it's already a FileProcessingError, rethrow it
+    if (error instanceof FileProcessingError) {
+      throw error
+    }
+
+    // Otherwise, wrap it in a FileProcessingError
+    throw new FileProcessingError(
+      (error as Error).message || "Unknown file processing error",
+      FileProcessingErrorType.EXTRACTION_FAILED,
+      error,
+    )
   }
 }
 
@@ -237,7 +343,13 @@ function readFileAsText(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(new Error("Failed to read file as text"))
+    reader.onerror = (event) => {
+      const error = new FileProcessingError("Failed to read file as text", FileProcessingErrorType.EXTRACTION_FAILED, {
+        event,
+        file,
+      })
+      reject(error)
+    }
     reader.readAsText(file)
   })
 }
@@ -249,7 +361,14 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(reader.result as ArrayBuffer)
-    reader.onerror = () => reject(new Error("Failed to read file as ArrayBuffer"))
+    reader.onerror = (event) => {
+      const error = new FileProcessingError(
+        "Failed to read file as ArrayBuffer",
+        FileProcessingErrorType.EXTRACTION_FAILED,
+        { event, file },
+      )
+      reject(error)
+    }
     reader.readAsArrayBuffer(file)
   })
 }
