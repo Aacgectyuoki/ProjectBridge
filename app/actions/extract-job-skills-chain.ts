@@ -10,6 +10,7 @@ import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
 import { SkillsLogger } from "@/utils/skills-logger"
 import { safeParseJSON, extractJsonFromText } from "@/utils/enhanced-json-repair"
 import { withRetry, isRateLimitError } from "@/utils/api-rate-limit-handler"
+import { repairJSON } from "@/utils/repair-json"
 
 // Default empty skills structure
 const defaultSkills: ExtractedSkills = {
@@ -188,7 +189,7 @@ async function extractJobSkillsDirect(
     // Format the prompt
     const prompt = jobSkillExtractionPrompt.format({ text: input })
     const system =
-      "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'."
+      "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'. Ensure all property values are followed by commas when needed."
 
     try {
       // Try different models in sequence
@@ -205,7 +206,16 @@ async function extractJobSkillsDirect(
         return JSON.stringify(extractedJson)
       }
 
-      return text
+      // Add pre-processing to ensure valid JSON before returning
+      try {
+        // Attempt to parse and re-stringify to ensure valid JSON
+        const parsed = JSON.parse(text)
+        return JSON.stringify(parsed)
+      } catch (parseError) {
+        console.log("Response is not valid JSON, attempting repair")
+        const repaired = repairJSON(text)
+        return repaired
+      }
     } catch (error) {
       console.error("Error generating text with all models:", error)
       // Return a simple JSON structure that will parse correctly

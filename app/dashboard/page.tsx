@@ -21,6 +21,14 @@ import { forceNewSession } from "@/utils/analysis-session-manager"
 // Import the debug function
 import { debugLogAllStoredData } from "@/utils/analysis-session-manager"
 import { toast } from "@/components/ui/use-toast"
+import { validateResume } from "@/utils/resume-validator"
+import { ResumeValidatorResults } from "@/components/resume-validator-results"
+// Add these imports at the top of the file
+import {
+  synchronizeSessionData,
+  recoverMissingData,
+  storeCompatibleAnalysisData,
+} from "@/utils/analysis-session-manager"
 
 export default function Dashboard() {
   const [activeStep, setActiveStep] = useState(1)
@@ -34,32 +42,68 @@ export default function Dashboard() {
   const [fileUploaded, setFileUploaded] = useState(false)
   const [showSkillsSummary, setShowSkillsSummary] = useState(false)
   const [showJobSkillsLog, setShowJobSkillsLog] = useState(false)
+  const [resumeText, setResumeText] = useState("")
+  const [validationResults, setValidationResults] = useState<any>(null)
 
+  // Update the useEffect hook to include data recovery
   useEffect(() => {
     // Create a new session when the dashboard is loaded directly
     if (window.location.pathname === "/dashboard" && !window.location.search.includes("keepSession")) {
       forceNewSession()
     }
+
+    // Try to recover any missing data and synchronize across sessions
+    synchronizeSessionData()
+    recoverMissingData()
   }, [])
 
-  const handleResumeUpload = (data) => {
-    setResumeData(data)
+  // Update the handleResumeUpload function to ensure data is properly stored
+  const handleResumeUpload = (text) => {
+    // If text is a string, it's coming directly from the text input
+    const isTextOnly = typeof text === "string"
+
+    if (isTextOnly) {
+      setResumeText(text)
+      setFileUploaded(true)
+      setActiveStep(2)
+
+      // Validate the resume text
+      const results = validateResume(text)
+      setValidationResults(results)
+
+      // Store the validation results in session storage
+      storeCompatibleAnalysisData("resumeAnalysis", results)
+
+      // Also store the raw text for potential reprocessing
+      storeCompatibleAnalysisData("resumeText", text)
+
+      // Log detected skills to console
+      console.log("Resume Text Analysis Complete:")
+      console.log("Technical Skills:", results.skills?.technical || [])
+      console.log("Soft Skills:", results.skills?.soft || [])
+
+      return
+    }
+
+    // Otherwise, handle as before for file uploads
+    setResumeData(text)
     setFileUploaded(true)
-    if (data.analysis) {
-      setResumeAnalysis(data.analysis)
+    if (text.analysis) {
+      setResumeAnalysis(text.analysis)
       setShowSkillsSummary(true)
+
+      // Ensure the analysis is stored in session storage
+      storeCompatibleAnalysisData("resumeAnalysis", text.analysis)
 
       // Log detected skills to console
       console.log("Resume Analysis Complete:")
-      console.log("Technical Skills:", data.analysis.skills?.technical || [])
-      console.log("Soft Skills:", data.analysis.skills?.soft || [])
-      console.log("Experience:", data.analysis.experience?.length || 0, "entries")
-      console.log("Education:", data.analysis.education?.length || 0, "entries")
+      console.log("Technical Skills:", text.analysis.skills?.technical || [])
+      console.log("Soft Skills:", text.analysis.skills?.soft || [])
+      console.log("Experience:", text.analysis.experience?.length || 0, "entries")
+      console.log("Education:", text.analysis.education?.length || 0, "entries")
     }
-    if (data) {
+    if (text) {
       setActiveStep(2)
-      // Don't automatically switch to job tab so user can see skills summary
-      // setActiveTab("job")
     }
   }
 
@@ -80,6 +124,27 @@ export default function Dashboard() {
   const handleRoleFocusSubmit = (focus) => {
     setRoleFocus(focus)
     // Navigate to analysis page
+  }
+
+  // Update the handleTextExtracted function to ensure data is properly stored
+  const handleTextExtracted = (text: string) => {
+    setResumeText(text)
+    if (text.trim()) {
+      // Validate the resume text
+      const results = validateResume(text)
+      setValidationResults(results)
+
+      // Store both the raw text and the validation results
+      storeCompatibleAnalysisData("resumeText", text)
+      storeCompatibleAnalysisData("resumeAnalysis", results)
+
+      // Mark as uploaded so the next button works
+      setFileUploaded(true)
+
+      console.log("Text extracted and validated:", text.substring(0, 100) + "...")
+      console.log("Technical Skills:", results.skills?.technical || [])
+      console.log("Soft Skills:", results.skills?.soft || [])
+    }
   }
 
   return (
@@ -139,48 +204,35 @@ export default function Dashboard() {
               </TabsTrigger>
             </TabsList>
             <TabsContent value="resume">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Upload Your Resume</CardTitle>
-                  <CardDescription>
-                    Upload your resume, paste your resume text, or provide your LinkedIn profile URL to analyze your
-                    current skills and experience.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ResumeUpload onUpload={handleResumeUpload} onFileSelect={handleFileSelection} />
-                </CardContent>
-                <CardFooter className="flex justify-between">
-                  <Button variant="outline" disabled>
-                    Back
-                  </Button>
+              <div className="space-y-6">
+                <ResumeUpload
+                  onUpload={handleResumeUpload}
+                  onFileSelect={handleFileSelection}
+                  onTextExtracted={handleTextExtracted}
+                />
+
+                {validationResults && <ResumeValidatorResults validationResults={validationResults} />}
+
+                {showSkillsSummary && resumeAnalysis && <SkillsSummary analysis={resumeAnalysis} />}
+
+                {resumeAnalysis && <ResumeAnalysisResults analysis={resumeAnalysis} />}
+
+                <div className="flex justify-end">
                   <Button
                     onClick={() => {
-                      if (resumeData || fileUploaded) {
+                      if (resumeData || fileUploaded || resumeText) {
                         setActiveStep(2)
                         setActiveTab("job")
                       }
                     }}
-                    disabled={!resumeData && !fileUploaded}
+                    disabled={!resumeData && !fileUploaded && !resumeText}
                     className="gap-1.5"
                   >
                     Next
                     <ArrowRight className="h-4 w-4" />
                   </Button>
-                </CardFooter>
-              </Card>
-
-              {showSkillsSummary && resumeAnalysis && (
-                <div className="mt-8">
-                  <SkillsSummary analysis={resumeAnalysis} />
                 </div>
-              )}
-
-              {resumeAnalysis && (
-                <div className="mt-8">
-                  <ResumeAnalysisResults analysis={resumeAnalysis} />
-                </div>
-              )}
+              </div>
             </TabsContent>
             <TabsContent value="job">
               <Card>

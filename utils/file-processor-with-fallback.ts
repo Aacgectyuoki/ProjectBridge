@@ -1,5 +1,6 @@
 import { cleanExtractedText } from "./text-preprocessor"
 import type { ProgressCallback } from "@/types/file-processing"
+import { extractTextFromPDFBinary, extractTextFromDOCXBinary } from "./document-extraction-fallback"
 
 // Maximum file size in bytes (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024
@@ -67,40 +68,56 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
       if (onProgress) onProgress({ stage: "loading pdf.js", progress: 10 })
 
       try {
-        // Import PDF.js dynamically
-        const pdfjs = await import("pdfjs-dist")
+        // Try to use PDF.js if available
+        const pdfjs = await import("pdfjs-dist").catch(() => null)
 
-        // Set the worker source
-        const pdfjsWorker = await import("pdfjs-dist/build/pdf.worker.entry")
-        pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker
+        if (pdfjs) {
+          // Set the worker source
+          const pdfjsWorker = await import("pdfjs-dist/build/pdf.worker.entry").catch(() => null)
+          if (pdfjsWorker) {
+            pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker
+          }
 
-        if (onProgress) onProgress({ stage: "reading pdf", progress: 30 })
+          if (onProgress) onProgress({ stage: "reading pdf", progress: 30 })
 
-        // Load the PDF file
-        const arrayBuffer = await readFileAsArrayBuffer(file)
-        const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise
+          // Load the PDF file
+          const arrayBuffer = await readFileAsArrayBuffer(file)
+          const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise
 
-        if (onProgress) onProgress({ stage: "extracting text", progress: 50 })
+          if (onProgress) onProgress({ stage: "extracting text", progress: 50 })
 
-        // Extract text from each page
-        let textContent = ""
-        for (let i = 1; i <= pdf.numPages; i++) {
-          if (onProgress)
-            onProgress({
-              stage: `extracting page ${i}/${pdf.numPages}`,
-              progress: 50 + (i / pdf.numPages) * 40,
-            })
+          // Extract text from each page
+          let textContent = ""
+          for (let i = 1; i <= pdf.numPages; i++) {
+            if (onProgress)
+              onProgress({
+                stage: `extracting page ${i}/${pdf.numPages}`,
+                progress: 50 + (i / pdf.numPages) * 40,
+              })
 
-          const page = await pdf.getPage(i)
-          const content = await page.getTextContent()
-          const strings = content.items.map((item) => ("str" in item ? item.str : ""))
-          textContent += strings.join(" ") + "\n\n"
+            const page = await pdf.getPage(i)
+            const content = await page.getTextContent()
+            const strings = content.items.map((item) => ("str" in item ? item.str : ""))
+            textContent += strings.join(" ") + "\n\n"
+          }
+
+          extractedText = textContent
+        } else {
+          // Fallback to basic extraction
+          if (onProgress) onProgress({ stage: "using fallback extraction", progress: 30 })
+          const arrayBuffer = await readFileAsArrayBuffer(file)
+          extractedText = extractTextFromPDFBinary(arrayBuffer)
         }
-
-        extractedText = textContent
       } catch (error) {
         console.error("PDF extraction error:", error)
-        extractedText = `PDF extraction encountered an error: ${error.message}. Please paste the text content directly.`
+        // Fallback to basic extraction
+        if (onProgress) onProgress({ stage: "using fallback extraction", progress: 30 })
+        try {
+          const arrayBuffer = await readFileAsArrayBuffer(file)
+          extractedText = extractTextFromPDFBinary(arrayBuffer)
+        } catch (fallbackError) {
+          extractedText = `PDF extraction failed. Please paste the text content directly.`
+        }
       }
 
       if (onProgress) onProgress({ stage: "processing", progress: 90 })
@@ -108,22 +125,36 @@ export async function processFile(file: File, onProgress?: ProgressCallback): Pr
       if (onProgress) onProgress({ stage: "loading mammoth.js", progress: 10 })
 
       try {
-        // Import mammoth.js dynamically
-        const mammoth = await import("mammoth")
+        // Try to use mammoth.js if available
+        const mammoth = await import("mammoth").catch(() => null)
 
-        if (onProgress) onProgress({ stage: "reading docx", progress: 30 })
+        if (mammoth) {
+          if (onProgress) onProgress({ stage: "reading docx", progress: 30 })
 
-        // Load the DOCX file
-        const arrayBuffer = await readFileAsArrayBuffer(file)
+          // Load the DOCX file
+          const arrayBuffer = await readFileAsArrayBuffer(file)
 
-        if (onProgress) onProgress({ stage: "extracting text", progress: 50 })
+          if (onProgress) onProgress({ stage: "extracting text", progress: 50 })
 
-        // Extract text from the DOCX
-        const result = await mammoth.extractRawText({ arrayBuffer })
-        extractedText = result.value
+          // Extract text from the DOCX
+          const result = await mammoth.extractRawText({ arrayBuffer })
+          extractedText = result.value
+        } else {
+          // Fallback to basic extraction
+          if (onProgress) onProgress({ stage: "using fallback extraction", progress: 30 })
+          const arrayBuffer = await readFileAsArrayBuffer(file)
+          extractedText = extractTextFromDOCXBinary(arrayBuffer)
+        }
       } catch (error) {
         console.error("DOCX extraction error:", error)
-        extractedText = `DOCX extraction encountered an error: ${error.message}. Please paste the text content directly.`
+        // Fallback to basic extraction
+        if (onProgress) onProgress({ stage: "using fallback extraction", progress: 30 })
+        try {
+          const arrayBuffer = await readFileAsArrayBuffer(file)
+          extractedText = extractTextFromDOCXBinary(arrayBuffer)
+        } catch (fallbackError) {
+          extractedText = `DOCX extraction failed. Please paste the text content directly.`
+        }
       }
 
       if (onProgress) onProgress({ stage: "processing", progress: 90 })

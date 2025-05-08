@@ -267,3 +267,156 @@ export function debugLogAllStoredData(): void {
 
   console.groupEnd()
 }
+
+// Add these new functions to improve session data handling
+
+// Check if a specific key exists in the current session
+export function hasSessionData(key: string): boolean {
+  if (typeof window === "undefined") return false
+
+  const sessionId = getCurrentSessionId()
+  const sessionKey = `${sessionId}_${key}`
+
+  // Check both session-specific and legacy storage
+  return localStorage.getItem(sessionKey) !== null || localStorage.getItem(key) !== null
+}
+
+// Synchronize data between sessions to prevent data loss
+export function synchronizeSessionData(): void {
+  if (typeof window === "undefined") return
+
+  console.log("Synchronizing session data...")
+
+  // Get all session IDs from localStorage
+  const sessionIds = new Set<string>()
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && key.includes("analysis_")) {
+      const parts = key.split("_")
+      if (parts.length >= 3) {
+        const sessionId = `analysis_${parts[1]}_${parts[2]}`
+        sessionIds.add(sessionId)
+      }
+    }
+  }
+
+  // Get current session ID
+  const currentSession = getCurrentSessionId()
+
+  // Common data keys to check
+  const dataKeys = ["resumeAnalysis", "jobAnalysis", "skillGapAnalysis", "projectIdeas"]
+
+  // For each data key, ensure current session has the data
+  dataKeys.forEach((key) => {
+    // If current session already has this data, skip
+    if (hasSessionData(key)) return
+
+    // Otherwise, look for this data in other sessions
+    sessionIds.forEach((sessionId) => {
+      if (sessionId === currentSession) return
+
+      const otherSessionKey = `${sessionId}_${key}`
+      const data = localStorage.getItem(otherSessionKey)
+
+      if (data) {
+        console.log(`Copying ${key} data from session ${sessionId} to current session`)
+        localStorage.setItem(`${currentSession}_${key}`, data)
+        // Also update legacy storage
+        localStorage.setItem(key, data)
+      }
+    })
+  })
+
+  console.log("Session data synchronization complete")
+}
+
+// Recover missing data from any available source
+export function recoverMissingData(): void {
+  if (typeof window === "undefined") return
+
+  console.log("Attempting to recover missing data...")
+
+  // Common data keys to check
+  const dataKeys = ["resumeAnalysis", "jobAnalysis", "skillGapAnalysis", "projectIdeas"]
+
+  // For each key, try to find data from any source
+  dataKeys.forEach((key) => {
+    // Skip if we already have this data
+    if (hasSessionData(key)) {
+      console.log(`${key} data already exists, skipping recovery`)
+      return
+    }
+
+    // Look for this key in any localStorage item
+    for (let i = 0; i < localStorage.length; i++) {
+      const storageKey = localStorage.key(i)
+      if (!storageKey) continue
+
+      // If this key contains our data key (e.g., "somePrefix_resumeAnalysis_someSuffix")
+      if (storageKey.includes(key)) {
+        try {
+          const data = localStorage.getItem(storageKey)
+          if (!data) continue
+
+          // Try to parse it as JSON to validate
+          JSON.parse(data)
+
+          // If valid, store it in our current session
+          const sessionId = getCurrentSessionId()
+          const sessionKey = `${sessionId}_${key}`
+
+          console.log(`Recovered ${key} data from ${storageKey}`)
+          localStorage.setItem(sessionKey, data)
+          // Also update legacy storage
+          localStorage.setItem(key, data)
+
+          // Break once we've found valid data
+          break
+        } catch (e) {
+          console.log(`Found invalid data for ${key} in ${storageKey}`)
+        }
+      }
+    }
+  })
+
+  console.log("Data recovery attempt complete")
+}
+
+// Enhanced version of getCompatibleAnalysisData with more aggressive recovery
+export function getEnhancedAnalysisData<T>(key: string, defaultValue: T): T {
+  if (typeof window === "undefined") return defaultValue
+
+  // First try the normal compatible data retrieval
+  const normalResult = getCompatibleAnalysisData(key, null)
+  if (normalResult) return normalResult
+
+  console.log(`Enhanced recovery for ${key} data...`)
+
+  // If that fails, try more aggressive recovery methods
+  // 1. Look for any key containing our target key
+  for (let i = 0; i < localStorage.length; i++) {
+    const storageKey = localStorage.key(i)
+    if (!storageKey || !storageKey.includes(key)) continue
+
+    try {
+      const data = localStorage.getItem(storageKey)
+      if (!data) continue
+
+      const parsed = JSON.parse(data)
+      console.log(`Recovered ${key} data from ${storageKey} using enhanced recovery`)
+
+      // Store this for future use
+      storeCompatibleAnalysisData(key, parsed)
+
+      return parsed
+    } catch (e) {
+      // Continue to next item if parsing fails
+    }
+  }
+
+  // 2. If we have resumeText or jobDescriptionText, we could regenerate the analysis
+  // This would be implemented in the specific components that need it
+
+  console.log(`Enhanced recovery failed for ${key}`)
+  return defaultValue
+}

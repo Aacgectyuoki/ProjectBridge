@@ -64,6 +64,7 @@
     "@supabase/supabase-js": "latest",
     "child_process": "latest",
     "path": "latest",
+    "pdfjs-dist": "latest",
     "mammoth": "latest"
   },
   "devDependencies": {

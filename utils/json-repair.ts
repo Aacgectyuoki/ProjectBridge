@@ -28,7 +28,7 @@ export function repairJSON(text: string): string {
   }
 
   // First, try to extract just the JSON part if there's other text
-  const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\]/)
+  const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\}/)
   let repairedJSON = jsonMatch ? jsonMatch[0] : text
 
   // If no JSON-like structure was found, try to create one from the text
@@ -129,6 +129,42 @@ export function repairJSON(text: string): string {
             repairedJSON = repairedJSON.slice(0, position) + "," + repairedJSON.slice(position)
             console.log("Added missing comma between property value and next property")
           }
+        }
+      }
+    }
+  }
+
+  // Enhance the repairJSON function to handle the specific error at position 468
+  // Add better handling for property values without proper delimiters
+  try {
+    JSON.parse(repairedJSON)
+  } catch (error) {
+    if (error.message.includes("Expected ',' or '}' after property value")) {
+      console.log("Fixing missing delimiter after property value")
+
+      // Extract position information from error message
+      const posMatch = error.message.match(/position (\d+)/)
+      if (posMatch && posMatch[1]) {
+        const position = Number.parseInt(posMatch[1], 10)
+
+        // Look at the problematic area
+        const problemArea = repairedJSON.substring(
+          Math.max(0, position - 20),
+          Math.min(repairedJSON.length, position + 20),
+        )
+        console.log(`Problem area: ${problemArea}`)
+
+        // Check if we're missing a comma or closing brace
+        const charAtPos = repairedJSON.charAt(position)
+        const prevChar = position > 0 ? repairedJSON.charAt(position - 1) : ""
+
+        // Insert appropriate delimiter based on context
+        if (charAtPos === '"' && !prevChar.match(/[,{[]/)) {
+          // Missing comma before a new property
+          repairedJSON = repairedJSON.slice(0, position) + "," + repairedJSON.slice(position)
+        } else if (charAtPos && !charAtPos.match(/[,}]/)) {
+          // Try inserting a comma
+          repairedJSON = repairedJSON.slice(0, position) + "," + repairedJSON.slice(position)
         }
       }
     }
@@ -282,7 +318,7 @@ export function safeParseJSON<T>(text: string, defaultValue: T): T {
       console.log("Error at the beginning of JSON, attempting to fix")
 
       // Try to find a valid JSON structure in the text
-      const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\]/)
+      const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\}/)
       if (jsonMatch) {
         console.log("Found valid JSON structure in text")
         try {
@@ -408,7 +444,7 @@ export function aggressiveJSONRepair(text: string): string {
   // First, ensure we're starting with a valid JSON structure
   if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) {
     // Try to find a JSON-like structure in the text
-    const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\]/)
+    const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\}/)
     if (jsonMatch) {
       text = jsonMatch[0]
     } else {
@@ -497,7 +533,7 @@ export function repairArrayFormatting(text: string): string {
   // First, ensure we're starting with a valid JSON structure
   if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) {
     // Try to find a JSON-like structure in the text
-    const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\]/)
+    const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\}/)
     if (jsonMatch) {
       text = jsonMatch[0]
     } else {
@@ -577,7 +613,7 @@ export function lineByLineJSONRepair(text: string): string {
   // First, ensure we're starting with a valid JSON structure
   if (!text.trim().startsWith("{") && !text.trim().startsWith("[")) {
     // Try to find a JSON-like structure in the text
-    const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\]/)
+    const jsonMatch = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\}/)
     if (jsonMatch) {
       text = jsonMatch[0]
     } else {

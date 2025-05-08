@@ -1,5 +1,6 @@
 import type { z } from "zod"
 import { safeParseJSON } from "../json-repair"
+import { repairJSON } from "../json-repair"
 
 export class OutputParser<T> {
   private schema: z.ZodType<T>
@@ -21,6 +22,35 @@ export class OutputParser<T> {
 
       if (!parsedData) {
         console.error(`OutputParser: Failed to parse JSON in ${this.name}`)
+        console.log(`OutputParser: Problematic text (first 100 chars): ${text.substring(0, 100)}...`)
+
+        // Try more aggressive JSON repair before giving up
+        try {
+          // Extract any JSON-like structure from the text
+          const jsonMatch = text.match(/\{[\s\S]*\}/)
+          if (jsonMatch) {
+            const extractedJson = jsonMatch[0]
+            console.log(`OutputParser: Attempting to repair extracted JSON structure`)
+
+            // Apply multiple repair strategies
+            const repaired = repairJSON(extractedJson)
+            const secondAttempt = safeParseJSON(repaired, null)
+
+            if (secondAttempt) {
+              console.log(`OutputParser: Successfully repaired JSON in second attempt`)
+              // Validate against the schema
+              try {
+                const validatedData = this.schema.parse(secondAttempt)
+                return validatedData
+              } catch (validationError) {
+                console.log(`OutputParser: Validation failed after repair, using partial data`)
+                return secondAttempt as T
+              }
+            }
+          }
+        } catch (repairError) {
+          console.error(`OutputParser: Advanced repair failed: ${repairError.message}`)
+        }
 
         // If we have a fallback creator, use it
         if (this.fallbackCreator) {

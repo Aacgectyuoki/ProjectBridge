@@ -17,6 +17,8 @@ import {
   storeCompatibleAnalysisData,
   getCurrentSessionId,
 } from "@/utils/analysis-session-manager"
+// Add these imports at the top of the file
+import { synchronizeSessionData, recoverMissingData, getEnhancedAnalysisData } from "@/utils/analysis-session-manager"
 
 export default function AnalyzePage() {
   const [isLoading, setIsLoading] = useState(true)
@@ -28,6 +30,7 @@ export default function AnalyzePage() {
   const { toast } = useToast()
   const [sessionInitialized, setSessionInitialized] = useState(false)
 
+  // Update the useEffect hook to include data recovery
   useEffect(() => {
     // Only run this once to prevent multiple session creations
     if (sessionInitialized) return
@@ -35,6 +38,10 @@ export default function AnalyzePage() {
     const fetchAnalysis = async () => {
       setIsLoading(true)
       setError(null)
+
+      // First, try to recover any missing data
+      synchronizeSessionData()
+      recoverMissingData()
 
       // Get the current session ID without creating a new one
       const sessionId = getCurrentSessionId()
@@ -51,9 +58,9 @@ export default function AnalyzePage() {
       debugLogAllStoredData()
 
       try {
-        // Try to get data using our enhanced compatible data retrieval
-        const resumeData = getCompatibleAnalysisData("resumeAnalysis", null)
-        const jobData = getCompatibleAnalysisData("jobAnalysis", null)
+        // Try to get data using our enhanced data retrieval
+        const resumeData = getEnhancedAnalysisData("resumeAnalysis", null)
+        const jobData = getEnhancedAnalysisData("jobAnalysis", null)
 
         // Check if we're missing data
         const isMissingResume = !resumeData
@@ -70,7 +77,7 @@ export default function AnalyzePage() {
         }
 
         // Check if we already have a cached analysis result
-        const cachedAnalysis = getCompatibleAnalysisData("skillGapAnalysis", null)
+        const cachedAnalysis = getEnhancedAnalysisData("skillGapAnalysis", null)
         if (cachedAnalysis) {
           console.log("Using cached skill gap analysis")
           setAnalysisData(cachedAnalysis)

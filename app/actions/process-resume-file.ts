@@ -1,7 +1,9 @@
 "use server"
 
 import { analyzeResume } from "./analyze-resume"
+import { storeCompatibleAnalysisData } from "@/utils/analysis-session-manager"
 
+// Update the processResumeFile function to ensure data is stored
 export async function processResumeFile(formData: FormData) {
   try {
     const file = formData.get("resume") as File
@@ -14,7 +16,20 @@ export async function processResumeFile(formData: FormData) {
     if (file.type === "text/plain") {
       // For text files, we can process directly
       const text = await file.text()
-      return await analyzeResume(text)
+
+      // Store the raw text for potential reprocessing
+      if (typeof window !== "undefined") {
+        storeCompatibleAnalysisData("resumeText", text)
+      }
+
+      const analysis = await analyzeResume(text)
+
+      // Store the analysis result
+      if (typeof window !== "undefined") {
+        storeCompatibleAnalysisData("resumeAnalysis", analysis)
+      }
+
+      return analysis
     } else if (
       file.type === "application/pdf" ||
       file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -49,7 +64,19 @@ export async function processResumeFile(formData: FormData) {
         Bachelor of Computer Science, University of Technology (2018)
       `
 
-      return await analyzeResume(mockResumeText)
+      // Store the mock text for potential reprocessing
+      if (typeof window !== "undefined") {
+        storeCompatibleAnalysisData("resumeText", mockResumeText)
+      }
+
+      const analysis = await analyzeResume(mockResumeText)
+
+      // Store the analysis result
+      if (typeof window !== "undefined") {
+        storeCompatibleAnalysisData("resumeAnalysis", analysis)
+      }
+
+      return analysis
     } else {
       throw new Error("Unsupported file type. Please upload a PDF, DOCX, or TXT file.")
     }
