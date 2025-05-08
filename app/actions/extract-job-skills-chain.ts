@@ -35,6 +35,7 @@ async function tryModelsInSequence(
   models = ["llama3-8b-8192", "mixtral-8x7b-32768", "llama3-70b-8192"],
 ): Promise<string> {
   let lastError: Error | null = null
+  const allResponses: string[] = []
 
   for (const model of models) {
     try {
@@ -59,7 +60,16 @@ async function tryModelsInSequence(
       )
 
       console.log(`Successfully used model: ${model}`)
-      return text
+
+      // Store all responses for potential fallback
+      allResponses.push(text)
+
+      // Check if the response contains JSON-like content
+      if (text.includes("{") && text.includes("}")) {
+        return text
+      }
+
+      console.log(`Response from ${model} doesn't contain JSON. Trying next model.`)
     } catch (error) {
       console.warn(`Error with model ${model}:`, error)
       lastError = error instanceof Error ? error : new Error(String(error))
@@ -70,6 +80,13 @@ async function tryModelsInSequence(
         continue
       }
     }
+  }
+
+  // If we have any responses but none contained JSON, use the first one
+  // and let the downstream processing handle it
+  if (allResponses.length > 0) {
+    console.log("No JSON found in any responses. Using first response for fallback processing.")
+    return allResponses[0]
   }
 
   // If all models failed, throw the last error
@@ -200,22 +217,35 @@ async function extractJobSkillsDirect(
       ])
 
       // First, try to extract JSON from text that might contain explanatory content
-      const extractedJson = extractJsonFromText(text)
-      if (extractedJson) {
-        console.log("Successfully extracted JSON from response")
-        return JSON.stringify(extractedJson)
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        console.log("Found JSON-like content in response")
+        try {
+          // Try to parse the extracted JSON
+          const parsed = JSON.parse(jsonMatch[0])
+          return JSON.stringify(parsed)
+        } catch (parseError) {
+          console.log("Extracted JSON is not valid, attempting repair")
+          const repaired = repairJSON(jsonMatch[0])
+          return repaired
+        }
       }
 
-      // Add pre-processing to ensure valid JSON before returning
-      try {
-        // Attempt to parse and re-stringify to ensure valid JSON
-        const parsed = JSON.parse(text)
-        return JSON.stringify(parsed)
-      } catch (parseError) {
-        console.log("Response is not valid JSON, attempting repair")
-        const repaired = repairJSON(text)
-        return repaired
+      // If no JSON-like content was found, create a default JSON structure
+      console.log("No JSON-like content found in response, creating default structure")
+
+      // Try to extract skills from text using regex patterns
+      const extractedSkills = extractSkillsFromText(text)
+
+      // If we extracted some skills, use them
+      if (Object.values(extractedSkills).some((arr) => arr.length > 0)) {
+        console.log("Successfully extracted some skills using regex patterns")
+        return JSON.stringify(extractedSkills)
       }
+
+      // Last resort: return default skills structure
+      console.log("Falling back to default skills structure")
+      return JSON.stringify(defaultSkills)
     } catch (error) {
       console.error("Error generating text with all models:", error)
       // Return a simple JSON structure that will parse correctly
@@ -310,6 +340,31 @@ function extractSkillsFromText(text: string): ExtractedSkills {
     other: [],
   }
 
+  // First try to find any JSON-like structures
+  const jsonMatches = text.match(/\{[^{}]*\}/g)
+  if (jsonMatches) {
+    for (const match of jsonMatches) {
+      try {
+        const parsed = JSON.parse(match)
+        // If we found a valid JSON object with skill arrays, use it
+        if (parsed && typeof parsed === "object") {
+          for (const key of Object.keys(skills)) {
+            if (Array.isArray(parsed[key])) {
+              skills[key] = [...skills[key], ...parsed[key]]
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore parsing errors and continue
+      }
+    }
+  }
+
+  // If we found skills in JSON fragments, return them
+  if (Object.values(skills).some((arr) => arr.length > 0)) {
+    return skills
+  }
+
   // Look for skill lists in the text
   const technicalMatch = text.match(/technical[^[]*\[(.*?)\]/is)
   if (technicalMatch && technicalMatch[1]) {
@@ -341,14 +396,57 @@ function extractSkillsFromText(text: string): ExtractedSkills {
     skills.databases = extractArrayItems(databasesMatch[1])
   }
 
-  // If we couldn't extract any skills, try a more general approach
+  // If we couldn't extract any skills using patterns, try a more general approach
   if (Object.values(skills).every((arr) => arr.length === 0)) {
     // Look for any quoted strings that might be skills
     const quotedStrings = text.match(/"([^"]+)"/g)
     if (quotedStrings) {
       // Remove duplicates and clean up
       const uniqueSkills = [...new Set(quotedStrings.map((s) => s.replace(/"/g, "").trim()))]
-      skills.technical = uniqueSkills
+
+      // Try to categorize skills based on common keywords
+      for (const skill of uniqueSkills) {
+        const lowerSkill = skill.toLowerCase()
+
+        // Simple categorization based on common terms
+        if (/java|python|javascript|typescript|c\+\+|ruby|go|rust|php|swift|kotlin|scala/i.test(lowerSkill)) {
+          skills.languages.push(skill)
+        } else if (/react|angular|vue|next|express|django|flask|spring|laravel|rails/i.test(lowerSkill)) {
+          skills.frameworks.push(skill)
+        } else if (/sql|mysql|postgresql|mongodb|oracle|cassandra|redis|dynamodb|firebase/i.test(lowerSkill)) {
+          skills.databases.push(skill)
+        } else if (/git|docker|kubernetes|jenkins|jira|aws|azure|gcp|terraform|ansible/i.test(lowerSkill)) {
+          skills.tools.push(skill)
+        } else if (/agile|scrum|kanban|waterfall|tdd|bdd|ci\/cd|devops|microservices/i.test(lowerSkill)) {
+          skills.methodologies.push(skill)
+        } else if (
+          /communication|leadership|teamwork|problem.solving|critical.thinking|time.management/i.test(lowerSkill)
+        ) {
+          skills.soft.push(skill)
+        } else {
+          // Default to technical if we can't categorize
+          skills.technical.push(skill)
+        }
+      }
+    }
+
+    // If still no skills found, look for words that might be skills
+    if (Object.values(skills).every((arr) => arr.length === 0)) {
+      // Extract words that might be technical terms (longer than 3 chars, not common words)
+      const words = text.split(/\s+/).filter((word) => {
+        const cleaned = word.replace(/[^\w]/g, "")
+        return (
+          cleaned.length > 3 &&
+          !/^(the|and|that|have|for|not|with|you|this|but|his|her|they|she|from|will|would|could|should|about|there)$/i.test(
+            cleaned,
+          )
+        )
+      })
+
+      if (words.length > 0) {
+        // Take up to 10 words that might be skills
+        skills.technical = [...new Set(words.slice(0, 10))]
+      }
     }
   }
 

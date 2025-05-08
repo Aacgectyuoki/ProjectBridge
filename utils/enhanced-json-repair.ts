@@ -75,6 +75,21 @@ export function safeParseJSON<T>(text: string, defaultValue: T = {} as T): T {
             console.error("Partial JSON extraction failed:", extractError.message)
           }
 
+          // If all else fails, try to extract just the summary
+          try {
+            const summaryMatch = text.match(/"summary"\s*:\s*"([^"]*?)"/s)
+            if (summaryMatch && summaryMatch[1]) {
+              const minimalResult = {
+                ...defaultValue,
+                summary: summaryMatch[1],
+              } as T
+              console.log("Extracted minimal result with summary")
+              return minimalResult
+            }
+          } catch (summaryError) {
+            console.error("Summary extraction failed:", summaryError.message)
+          }
+
           return defaultValue
         }
       }
@@ -109,11 +124,17 @@ function multiStageJSONRepair(text: string): string {
   // Stage 2: Fix array syntax issues
   result = fixArraySyntaxIssues(result)
 
-  // Stage 3: Fix property name and value issues
+  // Stage 3: Fix missing colons
+  result = fixMissingColons(result)
+
+  // Stage 4: Fix property name and value issues
   result = fixPropertyNameAndValueIssues(result)
 
-  // Stage 4: Fix structural issues
+  // Stage 5: Fix structural issues
   result = fixStructuralIssues(result)
+
+  // Stage 6: Fix trailing content after JSON
+  result = fixTrailingContent(result)
 
   return result
 }
@@ -155,19 +176,38 @@ function fixArraySyntaxIssues(json: string): string {
   // Fix unclosed arrays
   result = fixUnclosedArrays(result)
 
+  // Fix arrays followed by unexpected content (specific to the error we're seeing)
+  result = result.replace(/\}\s*\[/g, "},\n[")
+  result = result.replace(/\}\s*\{/g, "},\n{")
+
   return result
 }
 
-/**
- * Fix property name and value issues
- * @param json JSON string to fix
- * @returns Fixed JSON string
- */
+// Fix trailing content after JSON object
+function fixTrailingContent(json: string): string {
+  // Find the last proper closing brace
+  const lastBrace = json.lastIndexOf("}")
+  if (lastBrace !== -1 && lastBrace < json.length - 1) {
+    // Check if there's any non-whitespace content after the last brace
+    const trailingContent = json.substring(lastBrace + 1).trim()
+    if (trailingContent) {
+      // If there's trailing content, remove it
+      return json.substring(0, lastBrace + 1)
+    }
+  }
+  return json
+}
+
+// Enhance the fixPropertyNameAndValueIssues function to better handle missing colons
 function fixPropertyNameAndValueIssues(json: string): string {
   let result = json
 
   // Fix missing quotes around property names
   result = result.replace(/(\{|,)\s*([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
+
+  // Fix missing colons after property names (this is the specific issue we're addressing)
+  result = result.replace(/("[a-zA-Z0-9_]+")\s+([^:,\s])/g, "$1: $2")
+  result = result.replace(/("[a-zA-Z0-9_]+")\s+"/g, '$1: "')
 
   // Fix missing quotes around string values
   result = result.replace(/:\s*([a-zA-Z0-9_]+)(\s*[,}])/g, ':"$1"$2')
@@ -319,32 +359,40 @@ function extractPartialValidJSON(text: string): any | null {
       result.summary = ""
     }
 
-    // Extract strengths if present
-    const strengthsMatch = text.match(/"strengths"\s*:\s*(\[[\s\S]*?\])/s)
-    if (strengthsMatch && strengthsMatch[1]) {
-      try {
-        const strengthsText = fixArraySyntaxIssues(strengthsMatch[1])
-        const strengths = JSON.parse(strengthsText)
-        result.strengths = strengths
-      } catch (e) {
-        result.strengths = []
-      }
+    // Extract matchPercentage if present
+    const matchPercentageMatch = text.match(/"matchPercentage"\s*:\s*(\d+)/s)
+    if (matchPercentageMatch && matchPercentageMatch[1]) {
+      result.matchPercentage = Number.parseInt(matchPercentageMatch[1], 10)
     } else {
-      result.strengths = []
+      result.matchPercentage = 0
     }
 
-    // Extract weaknesses if present
-    const weaknessesMatch = text.match(/"weaknesses"\s*:\s*(\[[\s\S]*?\])/s)
-    if (weaknessesMatch && weaknessesMatch[1]) {
+    // Extract missingSkills if present
+    const missingSkillsMatch = text.match(/"missingSkills"\s*:\s*(\[[\s\S]*?\])/s)
+    if (missingSkillsMatch && missingSkillsMatch[1]) {
       try {
-        const weaknessesText = fixArraySyntaxIssues(weaknessesMatch[1])
-        const weaknesses = JSON.parse(weaknessesText)
-        result.weaknesses = weaknesses
+        const skillsText = fixArraySyntaxIssues(missingSkillsMatch[1])
+        const missingSkills = JSON.parse(skillsText)
+        result.missingSkills = missingSkills
       } catch (e) {
-        result.weaknesses = []
+        result.missingSkills = []
       }
     } else {
-      result.weaknesses = []
+      result.missingSkills = []
+    }
+
+    // Extract matchedSkills if present
+    const matchedSkillsMatch = text.match(/"matchedSkills"\s*:\s*(\[[\s\S]*?\])/s)
+    if (matchedSkillsMatch && matchedSkillsMatch[1]) {
+      try {
+        const skillsText = fixArraySyntaxIssues(matchedSkillsMatch[1])
+        const matchedSkills = JSON.parse(skillsText)
+        result.matchedSkills = matchedSkills
+      } catch (e) {
+        result.matchedSkills = []
+      }
+    } else {
+      result.matchedSkills = []
     }
 
     return result
@@ -463,10 +511,10 @@ function fixArrayClosureIssues(json: string): string {
   result = result.replace(/(\])\s+("([^"]+)"):/g, "$1, $2:")
 
   // Fix specific pattern from error logs: "marketing concepts"]"
-  result = result.replace(/"([^"]+)"\]/g, '"$1"],')
+  result = result.replace(/"([^"]+)"\]/g, '"$1"]')
 
   // Fix specific pattern from error logs: "ering", "selection"]"
-  result = result.replace(/("([^"]+)")\s*,\s*("([^"]+)")\]/g, "$1, $3],")
+  result = result.replace(/("([^"]+)")\s*,\s*("([^"]+)")\]/g, "$1, $3]")
 
   // Fix arrays with control characters
   result = result.replace(/\[\s*"[^"]*?[\x00-\x1F\x7F-\x9F][^"]*?"\s*\]/g, (match) => {
@@ -606,79 +654,10 @@ function aggressiveJSONRepair(jsonString: string): string {
   }
 }
 
-/**
- * Fixes missing colons after property names
- */
+// Add a new function to specifically fix missing colons
 function fixMissingColons(json: string): string {
   // Find property names that aren't followed by a colon
   return json.replace(/("(?:\\.|[^"\\])*")(\s*)([^:\s,}])/g, "$1:$2$3")
-}
-
-/**
- * Fixes missing commas in arrays
- */
-function fixMissingCommasInArrays(json: string): string {
-  // Look for array elements not separated by commas
-  return (
-    json
-      .replace(/\](\s*)\[/g, "],\n$1[")
-      .replace(/(["\d\w}])\s*\[/g, "$1,\n[")
-      .replace(/\](\s*)"/g, '],\n$1"')
-      .replace(/(["\d\w}])(\s+)"/g, '$1,\n$2"')
-      // Fix missing commas between array elements
-      .replace(/("[^"]*")(\s+)("[^"]*")/g, "$1,$2$3")
-  )
-}
-
-/**
- * Fixes missing commas in objects
- */
-function fixMissingCommasInObjects(json: string): string {
-  // Look for object properties not separated by commas
-  return json
-    .replace(/}(\s*){/g, "},\n$1{")
-    .replace(/(["\d\w\]])\s*{/g, "$1,\n{")
-    .replace(/}(\s*)"/g, '},\n$1"')
-    .replace(/(["\d\w\]])(\s+)"/g, '$1,\n$2"')
-}
-
-/**
- * Fixes trailing commas in objects and arrays
- */
-function fixTrailingCommas(json: string): string {
-  // Remove trailing commas in objects
-  json = json.replace(/,\s*}/g, "}")
-  // Remove trailing commas in arrays
-  json = json.replace(/,\s*\]/g, "]")
-  return json
-}
-
-/**
- * Fixes missing commas between properties
- */
-function fixMissingCommas(json: string): string {
-  // Add commas between properties where missing
-  return json
-    .replace(/}(\s*){/g, "},$1{")
-    .replace(/](\s*){/g, "],$1{")
-    .replace(/}(\s*)\[/g, "},$1[")
-    .replace(/](\s*)\[/g, "],$1[")
-}
-
-/**
- * Fixes unquoted property names
- */
-function fixUnquotedPropertyNames(json: string): string {
-  // Find property names that aren't quoted and quote them
-  return json.replace(/([{,]\s*)([a-zA-Z0-9_$]+)(\s*:)/g, '$1"$2"$3')
-}
-
-/**
- * Fixes missing quotes around string values
- */
-function fixMissingQuotes(json: string): string {
-  // Replace property values that are not quoted
-  return json.replace(/:\s*([a-zA-Z0-9_]+)(\s*[,}])/g, ': "$1"$2')
 }
 
 /**
@@ -695,31 +674,37 @@ function fixPositionSpecificIssue(json: string, position: number, errorMsg: stri
 
     // Check for specific error patterns
     if (errorMsg.includes("Expected ',' or ']' after array element")) {
-      // This is the specific error we're seeing - missing comma or closing bracket in array
+      // This is the specific error we're seeing in the current case
 
-      // Check if we need to add a comma or a closing bracket
+      // Check if we're at the end of an object inside an array
       const beforeError = json.substring(Math.max(0, position - 100), position)
       const afterError = json.substring(position, Math.min(json.length, position + 100))
 
-      // If the next non-whitespace character is a quote or number, we need a comma
-      if (afterError.trim().match(/^["0-9]/)) {
-        return json.substring(0, position) + ", " + json.substring(position)
+      // If we're at the end of an object and there's another object or property after it
+      if (beforeError.endsWith("}") && (afterError.trim().startsWith("{") || afterError.trim().startsWith('"'))) {
+        return json.substring(0, position) + "," + json.substring(position)
       }
 
-      // If the next non-whitespace character is a property name, we need to close the array
-      if (afterError.trim().match(/^"[^"]+"\s*:/)) {
-        return json.substring(0, position) + "], " + json.substring(position)
+      // If we're at the end of a string and there's another string after it
+      if (beforeError.endsWith('"') && afterError.trim().startsWith('"')) {
+        return json.substring(0, position) + "," + json.substring(position)
       }
 
-      // If the next non-whitespace character is a closing brace, we need to close the array
-      if (afterError.trim().startsWith("}")) {
-        return json.substring(0, position) + "]" + json.substring(position)
+      // If we're at the end of an object and we're inside an array
+      if (beforeError.endsWith("}") && beforeError.lastIndexOf("[") > beforeError.lastIndexOf("]")) {
+        // Check if we need to close the array
+        if (afterError.trim().startsWith('"') && afterError.includes(":")) {
+          return json.substring(0, position) + "]," + json.substring(position)
+        } else {
+          return json.substring(0, position) + "," + json.substring(position)
+        }
       }
 
       // Default: add a comma
       return json.substring(0, position) + "," + json.substring(position)
     }
 
+    // Handle other error types
     if (errorMsg.includes("Expected ':' after property name")) {
       // Missing colon after property name
       return json.substring(0, position) + ":" + json.substring(position)
@@ -872,81 +857,4 @@ function fixUnclosedArrays(json: string): string {
   }
 
   return result
-}
-
-/**
- * Fix single quotes to double quotes
- */
-function fixSingleQuotes(json: string): string {
-  // Replace single quotes with double quotes, but not inside already quoted strings
-  let result = ""
-  let inDoubleQuotes = false
-  let inSingleQuotes = false
-
-  for (let i = 0; i < json.length; i++) {
-    const char = json[i]
-    const prevChar = i > 0 ? json[i - 1] : ""
-
-    if (char === '"' && prevChar !== "\\") {
-      inDoubleQuotes = !inDoubleQuotes
-      result += char
-    } else if (char === "'" && prevChar !== "\\" && !inDoubleQuotes) {
-      inSingleQuotes = !inSingleQuotes
-      result += '"' // Replace single quote with double quote
-    } else if (inSingleQuotes && char === "'" && prevChar === "\\") {
-      result = result.slice(0, -1) + '\\"' // Replace escaped single quote
-    } else {
-      result += char
-    }
-  }
-
-  return result
-}
-
-/**
- * Fix newlines in strings
- */
-function fixNewLinesInStrings(json: string): string {
-  // Replace literal newlines in strings with \n
-  let result = ""
-  let inQuotes = false
-
-  for (let i = 0; i < json.length; i++) {
-    const char = json[i]
-    const prevChar = i > 0 ? json[i - 1] : ""
-
-    if (char === '"' && prevChar !== "\\") {
-      inQuotes = !inQuotes
-      result += char
-    } else if (inQuotes && (char === "\n" || char === "\r")) {
-      result += "\\n"
-    } else {
-      result += char
-    }
-  }
-
-  return result
-}
-
-/**
- * Fix missing braces around objects
- */
-function fixMissingBraces(json: string): string {
-  // If the JSON doesn't start with { and end with }, add them
-  let result = json.trim()
-  if (!result.startsWith("{") && !result.startsWith("[")) {
-    result = "{" + result
-  }
-  if (!result.endsWith("}") && !result.endsWith("]")) {
-    result += "}"
-  }
-  return result
-}
-
-/**
- * Fix unquoted property names
- */
-function fixUnquotedProperties(json: string): string {
-  // Add quotes around property names that are not quoted
-  return json.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3')
 }

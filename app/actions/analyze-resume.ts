@@ -1,19 +1,9 @@
-"use server"
+"\"use server"
 
 import { generateText } from "ai"
 import { groq } from "@ai-sdk/groq"
 import { safeParseJSON } from "@/utils/enhanced-json-repair"
 import { withRetry } from "@/utils/api-rate-limit-handler"
-
-// Explicitly get the API key from environment variables
-const GROQ_API_KEY = process.env.GROQ_API_KEY
-
-// Use a smaller model for less token usage
-const MODEL_OPTIONS = {
-  primary: "llama3-8b-8192", // Start with smaller model to avoid rate limits
-  fallback: "mixtral-8x7b-32768", // Fallback to another model if rate limited
-  lastResort: "llama3-70b-8192", // Last resort model
-}
 
 export type ResumeAnalysisResult = {
   skills: {
@@ -27,193 +17,162 @@ export type ResumeAnalysisResult = {
     platforms?: string[]
     other?: string[]
   }
-  experience: {
-    title: string
-    company: string
-    duration: string
-    description: string
+  contactInfo: {
+    name?: string
+    email?: string
+    phone?: string
+    location?: string
+    linkedin?: string
+    github?: string
+    website?: string
+  }
+  education?: {
+    degree?: string
+    institution?: string
+    year?: string
+  }[]
+  experience?: {
+    title?: string
+    company?: string
+    duration?: string
+    description?: string
     keyAchievements?: string[]
+    startDate?: string
+    endDate?: string
   }[]
-  education: {
-    degree: string
-    institution: string
-    year: string
-  }[]
-  summary: string
-  strengths: string[]
-  weaknesses: string[]
+  summary?: string
+  strengths?: string[]
+  weaknesses?: string[]
   projects?: {
     name: string
     description: string
-    technologies?: string[]
+    technologies: string[]
     date?: string
   }[]
 }
 
+const defaultResumeAnalysisResult: ResumeAnalysisResult = {
+  skills: {
+    technical: [],
+    soft: [],
+    tools: [],
+    frameworks: [],
+    languages: [],
+    databases: [],
+    methodologies: [],
+    platforms: [],
+    other: [],
+  },
+  contactInfo: {},
+  education: [],
+  experience: [],
+  summary: "",
+  strengths: [],
+  weaknesses: [],
+  projects: [],
+}
+
+/**
+ * Analyzes a resume and extracts key information
+ */
 export async function analyzeResume(resumeText: string): Promise<ResumeAnalysisResult> {
   try {
-    console.log("Starting resume analysis...")
-
-    // Check if API key is available
-    if (!GROQ_API_KEY) {
-      console.error("GROQ_API_KEY is not defined in environment variables")
-      throw new Error("Groq API key is missing. Please check your environment variables.")
-    }
-
-    // Sanitize the input text
-    const sanitizedText = resumeText
-      .replace(/[\x00-\x1F\x7F-\x9F]/g, " ") // Replace control characters
-      .replace(/\s+/g, " ") // Replace multiple spaces with a single space
-      .trim()
-
     const prompt = `
-      You are an expert resume analyzer for the tech industry. Analyze the following resume text and extract key information.
-
+      Analyze the following resume and extract key information in a structured format.
+      
       Resume:
-      ${sanitizedText}
-
-      Extract the following information:
-      1. Technical skills (programming languages, frameworks, tools, etc.)
-      2. Soft skills (communication, leadership, etc.)
-      3. Work experience (title, company, duration, description, key achievements)
-      4. Education (degree, institution, year)
+      ${resumeText}
+      
+      Please extract and return the following information in JSON format:
+      1. Skills (technical and soft skills)
+      2. Contact information (name, email, phone, location, LinkedIn, GitHub, website)
+      3. Education history (degree, institution, year)
+      4. Work experience (title, company, duration, description, key achievements)
       5. A brief professional summary
-      6. Key strengths based on the resume
-      7. Potential weaknesses or areas for improvement
-      8. Projects (name, description, technologies, date)
-
-      CRITICAL INSTRUCTION: Return ONLY a valid JSON object with NO explanatory text before or after.
-      Do NOT include phrases like "Here is the JSON" or "The analysis is".
-      The response must start with "{" and end with "}" and be valid JSON that can be parsed directly.
-
-      JSON structure:
+      6. Strengths
+      7. Areas for improvement (weaknesses)
+      8. Projects (name, description, technologies used, date)
+      
+      Ensure your response is ONLY the JSON object, with no additional text before or after.
+      Make sure all property names are in quotes and all string values are in quotes.
+      Do not use trailing commas after the last item in arrays or objects.
+      
+      Format your response as valid JSON with the following structure exactly:
       {
         "skills": {
-          "technical": ["skill1", "skill2", ...],
-          "soft": ["skill1", "skill2", ...],
-          "tools": ["tool1", "tool2", ...],
-          "frameworks": ["framework1", "framework2", ...],
-          "languages": ["language1", "language2", ...],
-          "databases": ["database1", "database2", ...],
-          "methodologies": ["methodology1", "methodology2", ...],
-          "platforms": ["platform1", "platform2", ...],
-          "other": ["other1", "other2", ...]
+          "technical": ["skill1", "skill2"],
+          "soft": ["skill1", "skill2"]
         },
+        "contactInfo": {
+          "name": "Name",
+          "email": "email@example.com",
+          "phone": "Phone Number",
+          "location": "Location",
+          "linkedin": "LinkedIn URL",
+          "github": "GitHub URL",
+          "website": "Website URL"
+        },
+        "education": [
+          {
+            "degree": "Degree",
+            "institution": "Institution",
+            "year": "Year"
+          }
+        ],
         "experience": [
           {
             "title": "Job Title",
             "company": "Company Name",
             "duration": "Duration",
-            "description": "Brief description",
-            "keyAchievements": ["achievement1", "achievement2", ...]
+            "description": "Job Description",
+            "keyAchievements": ["achievement1", "achievement2"],
+            "startDate": "Start Date",
+            "endDate": "End Date"
           }
         ],
-        "education": [
-          {
-            "degree": "Degree Name",
-            "institution": "Institution Name",
-            "year": "Year"
-          }
-        ],
-        "summary": "Professional summary",
-        "strengths": ["strength1", "strength2", ...],
-        "weaknesses": ["weakness1", "weakness2", ...],
+        "summary": "Professional Summary",
+        "strengths": ["strength1", "strength2"],
+        "weaknesses": ["weakness1", "weakness2"],
         "projects": [
           {
             "name": "Project Name",
             "description": "Project Description",
-            "technologies": ["tech1", "tech2", ...],
+            "technologies": ["tech1", "tech2"],
             "date": "Date"
           }
         ]
       }
     `
 
-    // Try models in sequence
-    async function tryModelsInSequence(): Promise<string> {
-      const models = [MODEL_OPTIONS.primary, MODEL_OPTIONS.fallback, MODEL_OPTIONS.lastResort]
+    const GROQ_API_KEY = process.env.GROQ_API_KEY
 
-      for (const model of models) {
-        try {
-          console.log(`Trying model: ${model}`)
-
-          const { text } = await withRetry(
-            async () => {
-              return await generateText({
-                model: groq(model, { apiKey: GROQ_API_KEY }),
-                prompt,
-                temperature: 0.1,
-                maxTokens: 1500, // Reduced from 2048 to stay under rate limits
-                system:
-                  "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'.",
-              })
-            },
-            {
-              maxRetries: 3,
-              initialDelayMs: 2000,
-              maxDelayMs: 10000,
-              backoffFactor: 1.5,
-            },
-          )
-
-          return text
-        } catch (error) {
-          console.error(`Error with model ${model}:`, error)
-
-          // If this is the last model, rethrow the error
-          if (model === models[models.length - 1]) {
-            throw error
-          }
-
-          // Otherwise, continue to the next model
-          console.log(`Falling back to next model...`)
-        }
-      }
-
-      throw new Error("All models failed")
+    if (!GROQ_API_KEY) {
+      console.error("GROQ_API_KEY is not defined in environment variables")
+      throw new Error("Groq API key is missing. Please check your environment variables.")
     }
 
-    // Try to get a response from any available model
-    const response = await tryModelsInSequence()
-
-    // Parse the response
-    const defaultResult: ResumeAnalysisResult = {
-      skills: {
-        technical: [],
-        soft: [],
+    const { text } = await withRetry(
+      async () => {
+        return await generateText({
+          model: groq("llama3-70b-8192", { apiKey: GROQ_API_KEY }),
+          prompt,
+          temperature: 0.2,
+          maxTokens: 2048,
+        })
       },
-      experience: [],
-      education: [],
-      summary: "",
-      strengths: [],
-      weaknesses: [],
-      projects: [],
-    }
+      {
+        maxRetries: 3,
+        initialDelayMs: 2000,
+        maxDelayMs: 10000,
+        backoffFactor: 1.5,
+      },
+    )
 
-    const result = safeParseJSON(response, defaultResult)
+    const result = safeParseJSON(text, defaultResumeAnalysisResult)
 
-    if (!result) {
-      console.error("Failed to parse resume analysis response")
-      return defaultResult
-    }
-
-    console.log("Resume analysis completed successfully")
-    return result as ResumeAnalysisResult
+    return result
   } catch (error) {
     console.error("Error analyzing resume:", error)
-
-    // Return a default result with error information
-    return {
-      skills: {
-        technical: [],
-        soft: [],
-      },
-      experience: [],
-      education: [],
-      summary: "Error analyzing resume. Please try again.",
-      strengths: [],
-      weaknesses: ["Resume analysis failed due to technical issues."],
-      projects: [],
-    }
+    return defaultResumeAnalysisResult
   }
 }

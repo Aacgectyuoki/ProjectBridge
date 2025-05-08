@@ -1,47 +1,79 @@
 /**
- * Fallback method to extract text from PDF binary data
- * This is a very basic approach that won't work well for all PDFs
+ * Fallback methods for document text extraction when libraries fail
  */
-export function extractTextFromPDFBinary(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
-  let text = ""
 
-  // Convert the binary data to a string, only including ASCII printable characters
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] >= 32 && bytes[i] <= 126) {
-      text += String.fromCharCode(bytes[i])
+/**
+ * Extract text from DOCX binary data
+ * This is a fallback when mammoth.js fails
+ */
+export function extractTextFromDOCXBinary(buffer: ArrayBuffer): string {
+  try {
+    // Convert ArrayBuffer to string (only ASCII printable chars)
+    const bytes = new Uint8Array(buffer)
+    let docString = ""
+
+    for (let i = 0; i < bytes.length; i++) {
+      // Only include ASCII printable characters
+      if (bytes[i] >= 32 && bytes[i] <= 126) {
+        docString += String.fromCharCode(bytes[i])
+      } else {
+        docString += " " // Replace non-printable with space
+      }
     }
-  }
 
-  // Look for patterns that might indicate text content
-  // This is a very simplified approach
-  const textBlocks = text.match(/[A-Za-z0-9\s.,;:'"!?()-]{10,}/g) || []
-  return textBlocks.join("\n\n")
+    // Extract text using pattern matching
+    let extractedText = ""
+
+    // Look for content in XML tags that might contain text
+    const contentMatches = docString.match(/<w:t[^>]*>([^<]+)<\/w:t>/g) || []
+    for (const match of contentMatches) {
+      const textMatch = match.match(/<w:t[^>]*>([^<]+)<\/w:t>/)
+      if (textMatch && textMatch[1]) {
+        extractedText += textMatch[1] + " "
+      }
+    }
+
+    // Look for paragraph breaks
+    const paragraphMatches = docString.match(/<w:p[^>]*>/g) || []
+    if (paragraphMatches.length > 0) {
+      // Replace paragraph markers with newlines
+      extractedText = extractedText.replace(new RegExp(`(${paragraphMatches.join("|")})`, "g"), "\n")
+    }
+
+    return extractedText || "Could not extract text from DOCX. Please paste content manually."
+  } catch (error) {
+    console.error("Error in DOCX fallback extraction:", error)
+    return "DOCX extraction failed. Please paste the text content directly."
+  }
 }
 
 /**
- * Fallback method to extract text from DOCX binary data
- * This looks for text between <w:t> tags which contain the actual text in DOCX files
+ * Extract text from RTF binary data
  */
-export function extractTextFromDOCXBinary(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
-  let text = ""
+export function extractTextFromRTFBinary(buffer: ArrayBuffer): string {
+  try {
+    // Convert ArrayBuffer to string
+    const bytes = new Uint8Array(buffer)
+    let rtfString = ""
 
-  // Convert the binary data to a string, only including ASCII printable characters
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] >= 32 && bytes[i] <= 126) {
-      text += String.fromCharCode(bytes[i])
+    for (let i = 0; i < bytes.length; i++) {
+      if (bytes[i] >= 32 && bytes[i] <= 126) {
+        rtfString += String.fromCharCode(bytes[i])
+      }
     }
+
+    // Remove RTF control sequences
+    const plainText = rtfString
+      .replace(/\{\\rtf1[^{}]*\}/g, "") // Remove header
+      .replace(/\\\w+\s?/g, "") // Remove control words
+      .replace(/\\\{/g, "{")
+      .replace(/\\\}/g, "}") // Unescape braces
+      .replace(/\\'[0-9a-f]{2}/g, "") // Remove hex escapes
+      .replace(/\{|\}/g, "") // Remove remaining braces
+
+    return plainText || "Could not extract text from RTF. Please paste content manually."
+  } catch (error) {
+    console.error("Error in RTF extraction:", error)
+    return "RTF extraction failed. Please paste the text content directly."
   }
-
-  // Extract text between <w:t> tags
-  const textMatches = text.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || []
-
-  // Join the matches with spaces
-  return textMatches
-    .map((match) => {
-      const textMatch = match.match(/<w:t[^>]*>([^<]*)<\/w:t>/)
-      return textMatch ? textMatch[1] : ""
-    })
-    .join(" ")
 }

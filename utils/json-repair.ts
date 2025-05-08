@@ -275,6 +275,60 @@ function rebuildJSONStructure(text: string): string {
   return `{${properties.join(",")}}`
 }
 
+// Add a more robust function to handle cases where no JSON is found
+// Add this function to the file:
+
+/**
+ * Creates a default JSON structure when no JSON can be extracted
+ * @param text The text to analyze for potential skill mentions
+ * @returns A JSON string with default structure and any detected skills
+ */
+export function createDefaultJsonFromText(text: string): string {
+  // Create a default structure
+  const defaultStructure = {
+    technical: [],
+    soft: [],
+    tools: [],
+    frameworks: [],
+    languages: [],
+    databases: [],
+    methodologies: [],
+    platforms: [],
+    other: [],
+  }
+
+  // Try to extract potential skills from the text
+  // Look for quoted strings that might be skills
+  const quotedSkills = text.match(/"([^"]+)"/g)
+  if (quotedSkills && quotedSkills.length > 0) {
+    // Clean up the skills and add them to technical
+    const cleanedSkills = quotedSkills.map((s) => s.replace(/"/g, "").trim())
+    defaultStructure.technical = [...new Set(cleanedSkills)]
+  }
+
+  // Look for words that might be technical terms
+  if (defaultStructure.technical.length === 0) {
+    const potentialSkills = text
+      .split(/\s+/)
+      .filter((word) => {
+        const cleaned = word.replace(/[^\w]/g, "")
+        return (
+          cleaned.length > 3 &&
+          !/^(the|and|that|have|for|not|with|you|this|but|his|her|they|she|from|will|would|could|should|about|there)$/i.test(
+            cleaned,
+          )
+        )
+      })
+      .slice(0, 10) // Take up to 10 potential skills
+
+    if (potentialSkills.length > 0) {
+      defaultStructure.technical = [...new Set(potentialSkills)]
+    }
+  }
+
+  return JSON.stringify(defaultStructure)
+}
+
 /**
  * Safe JSON parse with multiple fallback strategies
  */

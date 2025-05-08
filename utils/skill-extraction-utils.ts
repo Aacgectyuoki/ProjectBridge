@@ -1,6 +1,216 @@
 /**
- * Utility functions for skill extraction
+ * Utility functions for extracting skills from resume text
  */
+
+// Technical skill categories with common variations
+const TECHNICAL_SKILL_CATEGORIES = {
+  languages: [
+    "Java",
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "HTML",
+    "CSS",
+    "C#",
+    "C++",
+    "Ruby",
+    "PHP",
+    "Go",
+    "Rust",
+    "Swift",
+    "Kotlin",
+    "Scala",
+    "R",
+    "Perl",
+    "Shell",
+    "Bash",
+    "PowerShell",
+    "SQL",
+    "NoSQL",
+    "Apex",
+  ],
+  frameworks: [
+    "React",
+    "Angular",
+    "Vue",
+    "Next.js",
+    "Node.js",
+    "Express",
+    "Django",
+    "Flask",
+    "Spring",
+    "Spring Boot",
+    "Spring Cloud",
+    "Hibernate",
+    "Laravel",
+    "ASP.NET",
+    "Ruby on Rails",
+    "Symfony",
+    "Bootstrap",
+    "Tailwind",
+    "Material UI",
+    "jQuery",
+    "Redux",
+    "GraphQL",
+    "REST",
+    "SOAP",
+    "Kafka",
+    "RabbitMQ",
+    "MuleSoft",
+    "Salesforce Lightning",
+  ],
+  databases: [
+    "MySQL",
+    "PostgreSQL",
+    "Microsoft SQL",
+    "Oracle",
+    "MongoDB",
+    "DynamoDB",
+    "Cassandra",
+    "Redis",
+    "SQLite",
+    "MariaDB",
+    "Firebase",
+    "Elasticsearch",
+    "Neo4j",
+    "CouchDB",
+    "RDBMS",
+    "NoSQL",
+    "Vector Database",
+  ],
+  cloud: [
+    "AWS",
+    "EC2",
+    "S3",
+    "Lambda",
+    "RDS",
+    "DynamoDB",
+    "CloudWatch",
+    "IAM",
+    "SQS",
+    "ECS",
+    "EKS",
+    "ELB",
+    "Shield",
+    "API Gateway",
+    "Azure",
+    "Google Cloud",
+    "GCP",
+    "Heroku",
+    "DigitalOcean",
+    "Salesforce",
+    "Vercel",
+    "Netlify",
+  ],
+  devops: [
+    "Docker",
+    "Kubernetes",
+    "Jenkins",
+    "GitHub Actions",
+    "CircleCI",
+    "Travis CI",
+    "Ansible",
+    "Terraform",
+    "Puppet",
+    "Chef",
+    "Nagios",
+    "Prometheus",
+    "Grafana",
+    "ELK Stack",
+    "SonarQube",
+    "ArgoCD",
+    "GitOps",
+  ],
+  testing: [
+    "JUnit",
+    "Mockito",
+    "Jest",
+    "Mocha",
+    "Chai",
+    "Jasmine",
+    "Selenium",
+    "Cypress",
+    "Postman",
+    "SoapUI",
+    "TestNG",
+    "PyTest",
+    "RSpec",
+    "Cucumber",
+    "Protractor",
+    "WebdriverIO",
+    "CI/CD",
+  ],
+  aiml: [
+    "LangChain",
+    "RAG",
+    "NLP",
+    "Machine Learning",
+    "Deep Learning",
+    "TensorFlow",
+    "PyTorch",
+    "Keras",
+    "Scikit-learn",
+    "OpenAI",
+    "GPT",
+    "BERT",
+    "Vector Database",
+    "Embeddings",
+    "Transformers",
+    "Neural Networks",
+  ],
+  security: [
+    "OWASP",
+    "HIPAA",
+    "OAuth",
+    "JWT",
+    "SSL/TLS",
+    "Encryption",
+    "Authentication",
+    "Authorization",
+    "Identity Management",
+    "Firewall",
+    "VPN",
+    "Penetration Testing",
+    "Security Audit",
+    "Compliance",
+  ],
+  versionControl: ["Git", "GitHub", "Bitbucket", "GitLab", "SVN", "Mercurial", "Version Control"],
+  webServices: ["REST", "GraphQL", "SOAP", "API", "Microservices", "SOA", "Web Services", "API Gateway"],
+  methodologies: ["Agile", "Scrum", "Kanban", "Waterfall", "SDLC", "DevOps", "CI/CD", "TDD", "BDD", "XP"],
+}
+
+// Soft skills with variations
+const SOFT_SKILLS = [
+  "Communication",
+  "Collaboration",
+  "Leadership",
+  "Problem Solving",
+  "Critical Thinking",
+  "Teamwork",
+  "Time Management",
+  "Adaptability",
+  "Flexibility",
+  "Creativity",
+  "Innovation",
+  "Attention to Detail",
+  "Organization",
+  "Analytical Skills",
+  "Decision Making",
+  "Emotional Intelligence",
+  "Conflict Resolution",
+  "Negotiation",
+  "Presentation",
+  "Public Speaking",
+  "Customer Service",
+  "Interpersonal Skills",
+  "Mentoring",
+  "Coaching",
+  "Project Management",
+  "Strategic Thinking",
+]
+
+// Flatten all technical skills into a single array
+const ALL_TECHNICAL_SKILLS = Object.values(TECHNICAL_SKILL_CATEGORIES).flat()
 
 // Define skill categories
 export const skillCategories = {
@@ -296,6 +506,192 @@ export const skillCategories = {
     "Collaboration",
     "Team Leadership", // Added Team Leadership to soft skills
   ],
+}
+
+/**
+ * Extract technical skills from resume text
+ */
+export function extractTechnicalSkills(text: string): string[] {
+  if (!text) return []
+
+  const normalizedText = text.toLowerCase()
+  const foundSkills = new Set<string>()
+
+  // Check for each skill
+  for (const skill of ALL_TECHNICAL_SKILLS) {
+    try {
+      // Create a regex that matches the skill as a whole word, case insensitive
+      const regex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+
+      if (regex.test(normalizedText)) {
+        // Use the original casing from our list
+        foundSkills.add(skill)
+      }
+    } catch (error) {
+      // If regex fails, fall back to simple string matching
+      if (normalizedText.includes(skill.toLowerCase())) {
+        foundSkills.add(skill)
+      }
+    }
+  }
+
+  // Look for skills sections to extract additional skills
+  const skillsSectionRegex = /skills[\s\n]*:?[\s\n]*([\s\S]*?)(?:\n\s*\n|\n[A-Z]+|\n?$)/i
+  const skillsMatch = text.match(skillsSectionRegex)
+
+  if (skillsMatch && skillsMatch[1]) {
+    const skillsSection = skillsMatch[1]
+
+    // Extract skills from bullet points or comma-separated lists
+    const bulletPointSkills = skillsSection.match(/[•\-*]\s*([^•\-*\n]+)/g) || []
+    for (const bullet of bulletPointSkills) {
+      const cleanedBullet = bullet.replace(/^[•\-*]\s*/, "").trim()
+      const bulletSkills = cleanedBullet
+        .split(/[,:/]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 1)
+
+      for (const skill of bulletSkills) {
+        // Check if this matches any of our known skills
+        for (const knownSkill of ALL_TECHNICAL_SKILLS) {
+          if (skill.toLowerCase().includes(knownSkill.toLowerCase())) {
+            foundSkills.add(knownSkill)
+          }
+        }
+      }
+    }
+
+    // Look for comma-separated lists
+    const commaLists = skillsSection.match(/([^•\-*\n][^•\-*\n]+)/g) || []
+    for (const list of commaLists) {
+      const listSkills = list
+        .split(/[,:/]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 1)
+
+      for (const skill of listSkills) {
+        // Check if this matches any of our known skills
+        for (const knownSkill of ALL_TECHNICAL_SKILLS) {
+          if (skill.toLowerCase().includes(knownSkill.toLowerCase())) {
+            foundSkills.add(knownSkill)
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(foundSkills)
+}
+
+/**
+ * Extract soft skills from resume text
+ */
+export function extractSoftSkills(text: string): string[] {
+  if (!text) return []
+
+  const normalizedText = text.toLowerCase()
+  const foundSkills = new Set<string>()
+
+  // Check for each skill
+  for (const skill of SOFT_SKILLS) {
+    try {
+      // Create a regex that matches the skill as a whole word, case insensitive
+      const regex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+
+      if (regex.test(normalizedText)) {
+        // Use the original casing from our list
+        foundSkills.add(skill)
+      }
+    } catch (error) {
+      // If regex fails, fall back to simple string matching
+      if (normalizedText.includes(skill.toLowerCase())) {
+        foundSkills.add(skill)
+      }
+    }
+  }
+
+  // Look for soft skills sections
+  const softSkillsRegex = /soft skills[\s\n]*:?[\s\n]*([\s\S]*?)(?:\n\s*\n|\n[A-Z]+|\n?$)/i
+  const softSkillsMatch = text.match(softSkillsRegex)
+
+  if (softSkillsMatch && softSkillsMatch[1]) {
+    const softSkillsSection = softSkillsMatch[1]
+
+    // Extract skills from bullet points or comma-separated lists
+    const bulletPointSkills = softSkillsSection.match(/[•\-*]\s*([^•\-*\n]+)/g) || []
+    for (const bullet of bulletPointSkills) {
+      const cleanedBullet = bullet.replace(/^[•\-*]\s*/, "").trim()
+      const bulletSkills = cleanedBullet
+        .split(/[,:/]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 1)
+
+      for (const skill of bulletSkills) {
+        // Check if this matches any of our known skills
+        for (const knownSkill of SOFT_SKILLS) {
+          if (skill.toLowerCase().includes(knownSkill.toLowerCase())) {
+            foundSkills.add(knownSkill)
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(foundSkills)
+}
+
+/**
+ * Get skills by category from resume text
+ */
+export function getSkillsByCategory(text: string): Record<string, string[]> {
+  if (!text) return {}
+
+  const normalizedText = text.toLowerCase()
+  const skillsByCategory: Record<string, string[]> = {}
+
+  // Initialize categories
+  for (const category of Object.keys(TECHNICAL_SKILL_CATEGORIES)) {
+    skillsByCategory[category] = []
+  }
+
+  // Check each category
+  for (const [category, skills] of Object.entries(TECHNICAL_SKILL_CATEGORIES)) {
+    const foundSkills = new Set<string>()
+
+    for (const skill of skills) {
+      try {
+        // Create a regex that matches the skill as a whole word, case insensitive
+        const regex = new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+
+        if (regex.test(normalizedText)) {
+          // Use the original casing from our list
+          foundSkills.add(skill)
+        }
+      } catch (error) {
+        // If regex fails, fall back to simple string matching
+        if (normalizedText.includes(skill.toLowerCase())) {
+          foundSkills.add(skill)
+        }
+      }
+    }
+
+    skillsByCategory[category] = Array.from(foundSkills)
+  }
+
+  // Add soft skills
+  skillsByCategory.softSkills = extractSoftSkills(text)
+
+  return skillsByCategory
+}
+
+/**
+ * Get all skills from resume text
+ */
+export function getAllSkills(text: string): { technical: string[]; soft: string[] } {
+  return {
+    technical: extractTechnicalSkills(text),
+    soft: extractSoftSkills(text),
+  }
 }
 
 /**
