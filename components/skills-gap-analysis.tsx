@@ -60,7 +60,7 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
   return (
     <div className="space-y-6">
       {/* Add the new SkillMatchDisplay component */}
-      <SkillMatchDisplay />
+      <SkillMatchDisplay analysis={safeAnalysis} />
 
       <Card>
         <CardHeader>
@@ -127,7 +127,7 @@ export function SkillsGapAnalysis({ analysis }: SkillsGapAnalysisProps) {
                       >
                         <span className={`font-medium ${skill.priority === "High" ? "font-bold" : ""}`}>
                           {skill.name}
-                          {skill.name.toLowerCase() === "hugging face" && (
+                          {skill.name.toLowerCase() === "kotlin" && (
                             <span className="ml-2 text-xs bg-red-200 text-red-800 px-2 py-0.5 rounded-full">
                               Critical Gap
                             </span>

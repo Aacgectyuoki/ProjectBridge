@@ -1,61 +1,88 @@
-"use client"
-
-import { useState, useEffect } from "react"
-import { getCompatibleAnalysisData } from "@/utils/analysis-session-manager"
+import { Progress } from "@/components/ui/progress"
+import { Card, CardContent } from "@/components/ui/card"
+import { CheckCircle, XCircle } from "lucide-react"
 import type { SkillGapAnalysisResult } from "@/app/actions/analyze-skills-gap"
 
-export function SkillMatchDisplay() {
-  const [analysisData, setAnalysisData] = useState<SkillGapAnalysisResult | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [matchResult, setMatchResult] = useState(null)
-  const [activeTab, setActiveTab] = useState("overview")
+interface SkillMatchDisplayProps {
+  analysis: SkillGapAnalysisResult
+}
 
-  useEffect(() => {
-    // Fetch the analysis data from localStorage
-    const data = getCompatibleAnalysisData<SkillGapAnalysisResult>("skillGapAnalysis", null)
-    console.log("SkillMatchDisplay - Fetched data:", data)
-    setAnalysisData(data)
-    setIsLoading(false)
-  }, [])
+export function SkillMatchDisplay({ analysis }: SkillMatchDisplayProps) {
+  console.log("SkillMatchDisplay - Fetched data:", analysis)
 
-  if (isLoading) {
-    return (
-      <div className="p-4 border rounded-lg bg-gray-50">
-        <p className="text-center text-gray-500">Loading skill match data...</p>
-      </div>
-    )
+  if (!analysis) return null
+
+  // Ensure we have valid data with fallbacks
+  const safeAnalysis = {
+    ...analysis,
+    matchPercentage: analysis.matchPercentage || 0,
+    missingSkills: Array.isArray(analysis.missingSkills) ? analysis.missingSkills : [],
+    matchedSkills: Array.isArray(analysis.matchedSkills) ? analysis.matchedSkills : [],
   }
 
-  if (!analysisData) {
-    return (
-      <div className="p-4 border rounded-lg bg-gray-50">
-        <p className="text-center text-gray-500">No skill data available for comparison</p>
-      </div>
-    )
-  }
+  // Calculate the number of matched and missing skills
+  const matchedCount = safeAnalysis.matchedSkills.length
+  const missingCount = safeAnalysis.missingSkills.length
+  const totalSkills = matchedCount + missingCount
 
-  // Calculate the percentage for the progress bar
-  const matchPercentage = analysisData.matchPercentage || 0
+  // Determine the match status text and color
+  let matchStatusText = ""
+  let matchStatusColor = ""
+
+  if (safeAnalysis.matchPercentage >= 80) {
+    matchStatusText = "Excellent Match"
+    matchStatusColor = "text-green-600"
+  } else if (safeAnalysis.matchPercentage >= 60) {
+    matchStatusText = "Good Match"
+    matchStatusColor = "text-blue-600"
+  } else if (safeAnalysis.matchPercentage >= 40) {
+    matchStatusText = "Fair Match"
+    matchStatusColor = "text-orange-600"
+  } else {
+    matchStatusText = "Poor Match"
+    matchStatusColor = "text-red-600"
+  }
 
   return (
-    <div className="p-4 border rounded-lg">
-      <h2 className="text-xl font-bold mb-4">Skill Match Analysis</h2>
-      <div className="mb-2">
-        <div className="flex justify-between mb-1">
-          <span className="text-sm font-medium">Match Percentage</span>
-          <span className="text-sm font-medium">{matchPercentage}%</span>
+    <Card className="overflow-hidden">
+      <CardContent className="p-0">
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="text-center md:text-left">
+              <h2 className="text-2xl font-bold">Skills Match</h2>
+              <p className={`text-xl font-semibold ${matchStatusColor}`}>{matchStatusText}</p>
+            </div>
+
+            <div className="flex-1 max-w-md">
+              <div className="flex justify-between text-sm mb-1">
+                <span>0%</span>
+                <span>50%</span>
+                <span>100%</span>
+              </div>
+              <Progress value={safeAnalysis.matchPercentage} className="h-3" />
+              <div className="text-center mt-2 font-medium text-lg">{safeAnalysis.matchPercentage}%</div>
+            </div>
+
+            <div className="flex gap-6">
+              <div className="text-center">
+                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mx-auto">
+                  <CheckCircle className="h-6 w-6 text-green-600" />
+                </div>
+                <p className="mt-1 font-medium">{matchedCount}</p>
+                <p className="text-sm text-gray-500">Matched</p>
+              </div>
+
+              <div className="text-center">
+                <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto">
+                  <XCircle className="h-6 w-6 text-red-600" />
+                </div>
+                <p className="mt-1 font-medium">{missingCount}</p>
+                <p className="text-sm text-gray-500">Missing</p>
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="w-full bg-gray-200 rounded-full h-2.5">
-          <div className="bg-green-600 h-2.5 rounded-full" style={{ width: `${matchPercentage}%` }}></div>
-        </div>
-      </div>
-      <p className="text-sm text-gray-600 mt-2">
-        {matchPercentage < 30
-          ? "Significant skill gaps identified"
-          : matchPercentage < 60
-            ? "Some skill gaps identified"
-            : "Good match with minor gaps"}
-      </p>
-    </div>
+      </CardContent>
+    </Card>
   )
 }

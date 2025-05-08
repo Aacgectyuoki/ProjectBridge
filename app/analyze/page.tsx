@@ -1,9 +1,6 @@
 "use client"
 
-import { AlertDescription } from "@/components/ui/alert"
-
-import { Alert } from "@/components/ui/alert"
-
+import { Alert, AlertDescription as UIDescription } from "@/components/ui/alert"
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -39,6 +36,22 @@ export default function AnalyzePage() {
   const { toast } = useToast()
   const [sessionInitialized, setSessionInitialized] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
+  const [loadingProgress, setLoadingProgress] = useState(10)
+
+  const progressSteps = {
+    INITIALIZING: 5,
+    SYNCING_DATA: 10,
+    RECOVERING_DATA: 20,
+    SESSION_LOOKUP: 30,
+    DEBUG_LOGGING: 40,
+    DATA_RETRIEVAL: 50,
+    DATA_VALIDATION: 60,
+    CACHED_ANALYSIS_CHECK: 70,
+    PERFORMING_ANALYSIS: 80,
+    ANALYSIS_COMPLETION: 90,
+    STORING_RESULTS: 95,
+    COMPLETE: 100,
+  }
 
   // Update the useEffect hook to include data recovery
   useEffect(() => {
@@ -48,15 +61,19 @@ export default function AnalyzePage() {
     const fetchAnalysis = async () => {
       setIsLoading(true)
       setError(null)
+      setLoadingProgress(progressSteps.INITIALIZING)
 
       try {
         // First, try to recover any missing data
         synchronizeSessionData()
+        setLoadingProgress(progressSteps.SYNCING_DATA)
         recoverMissingData()
+        setLoadingProgress(progressSteps.RECOVERING_DATA)
 
         // Get the current session ID without creating a new one
         const sessionId = getCurrentSessionId()
         console.log("Using session ID:", sessionId)
+        setLoadingProgress(progressSteps.SESSION_LOOKUP)
 
         // Debug log all stored data to help diagnose issues
         const debugLogAllStoredData = () => {
@@ -67,10 +84,12 @@ export default function AnalyzePage() {
           }
         }
         debugLogAllStoredData()
+        setLoadingProgress(progressSteps.DEBUG_LOGGING)
 
         // Try to get data using our enhanced data retrieval
         const resumeData = getEnhancedAnalysisData("resumeAnalysis", null)
         const jobData = getEnhancedAnalysisData("jobAnalysis", null)
+        setLoadingProgress(progressSteps.DATA_RETRIEVAL)
 
         // Add better debugging and data handling
         console.log("Resume data from storage:", resumeData)
@@ -89,6 +108,7 @@ export default function AnalyzePage() {
           setIsLoading(false)
           return // Exit early if data is missing
         }
+        setLoadingProgress(progressSteps.DATA_VALIDATION)
 
         // Check if we already have a cached analysis result
         const cachedAnalysis = getEnhancedAnalysisData("skillGapAnalysis", null)
@@ -98,12 +118,14 @@ export default function AnalyzePage() {
           setIsLoading(false)
           return // Exit early if we have cached data
         }
+        setLoadingProgress(progressSteps.CACHED_ANALYSIS_CHECK)
 
         // Perform the analysis
         try {
           console.log("Performing new skills gap analysis")
           console.log("Using resume data:", resumeData)
           console.log("Using job data:", jobData)
+          setLoadingProgress(progressSteps.PERFORMING_ANALYSIS)
 
           // Use our analysis function with error handling
           const gapAnalysis = await withRetryAndErrorHandling(
@@ -125,6 +147,7 @@ export default function AnalyzePage() {
               },
             },
           )
+          setLoadingProgress(progressSteps.ANALYSIS_COMPLETION)
 
           if (!gapAnalysis) {
             throw new SkillsGapAnalysisError(
@@ -136,6 +159,7 @@ export default function AnalyzePage() {
           // Cache the result using our enhanced compatible storage
           console.log("Storing analysis result:", gapAnalysis)
           storeCompatibleAnalysisData("skillGapAnalysis", gapAnalysis)
+          setLoadingProgress(progressSteps.STORING_RESULTS)
 
           setAnalysisData(gapAnalysis)
         } catch (error) {
@@ -154,6 +178,39 @@ export default function AnalyzePage() {
         handleError(error as Error, ErrorCategory.UNKNOWN, ErrorSeverity.ERROR)
 
         console.error("Error in analysis process:", error)
+
+        // Enhanced error handling
+        if (error instanceof Error) {
+          // Log detailed error info including position if available
+          if (error.message.includes("position")) {
+            const positionMatch = error.message.match(/position (\d+)/)
+            if (positionMatch && positionMatch[1]) {
+              const errorPosition = Number.parseInt(positionMatch[1], 10)
+              console.error(`JSON parse error at position ${errorPosition}`)
+
+              // Extract context around error position
+              // Assuming resumeData and jobData are the JSON strings
+              let jsonString = ""
+              if (error.message.includes("resume")) {
+                jsonString = JSON.stringify(resumeData) // Or however you have access to the original string
+              } else if (error.message.includes("job")) {
+                jsonString = JSON.stringify(jobData) // Or however you have access to the original string
+              }
+
+              if (typeof jsonString === "string") {
+                const start = Math.max(0, errorPosition - 100)
+                const end = Math.min(jsonString.length, errorPosition + 100)
+                console.error(
+                  `Error context: "${jsonString.substring(start, errorPosition)}[ERROR HERE]${jsonString.substring(
+                    errorPosition,
+                    end,
+                  )}"`,
+                )
+              }
+            }
+          }
+        }
+
         setError({
           message: "An unexpected error occurred. Please try again.",
           type: "unknown",
@@ -163,6 +220,7 @@ export default function AnalyzePage() {
         setAnalysisData(mockAnalysisData)
       } finally {
         setIsLoading(false)
+        setLoadingProgress(progressSteps.COMPLETE)
       }
     }
 
@@ -254,7 +312,7 @@ export default function AnalyzePage() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    <Progress value={45} className="h-2" />
+                    <Progress value={loadingProgress} className="h-2" />
                     <p className="text-sm text-gray-500">This may take a moment</p>
                   </div>
                 </CardContent>
@@ -326,10 +384,10 @@ export default function AnalyzePage() {
                     {error.type && (
                       <Alert variant="destructive" className="bg-red-50 border-red-200">
                         <AlertCircle className="h-4 w-4 text-red-500" />
-                        <AlertDescription className="text-red-700">
+                        <UIDescription className="text-red-700">
                           <p className="font-medium">Error details:</p>
                           <p className="text-sm">Type: {error.type}</p>
-                        </AlertDescription>
+                        </UIDescription>
                       </Alert>
                     )}
 
