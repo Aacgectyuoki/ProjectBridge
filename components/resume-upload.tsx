@@ -51,6 +51,8 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
     const selectedFile = e.target.files?.[0]
     if (!selectedFile) return
 
+    console.log("File selected:", selectedFile.name) // Add logging
+
     setFile(selectedFile)
     setIsProcessing(true)
     setProgress(0)
@@ -98,6 +100,8 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
         }
       })
 
+      console.log("Text extracted successfully, length:", text.length) // Add logging
+
       setExtractedText(text)
       setIsProcessing(false)
       setIsPerformingOCR(false)
@@ -115,9 +119,9 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
         onTextExtracted(text)
       }
     } catch (error) {
-      handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: true })
+      console.error("Error processing file:", error) // Ensure error is logged
 
-      console.error("Error processing file:", error)
+      handleError(error as Error, ErrorCategory.FILE_PROCESSING, ErrorSeverity.ERROR, { notifyUser: true })
 
       setError({
         message: (error as Error).message || "Error processing file",
@@ -129,13 +133,24 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
     }
   }
 
+  const handleChooseFile = () => {
+    console.log("Choose file button clicked") // Add logging
+    if (fileInputRef.current) {
+      // Use click() method on the DOM element
+      fileInputRef.current.click()
+    }
+  }
+
   const handleTextSubmit = () => {
+    console.log("Text submit button clicked") // Add logging
     const textToProcess = activeTab === "upload" ? extractedText : manualText
 
     if (!textToProcess.trim()) {
       setError({ message: "Please enter text before submitting" })
       return
     }
+
+    console.log("Processing text, length:", textToProcess.length) // Add logging
 
     // Always call onUpload with the processed text
     if (onUpload) {
@@ -149,12 +164,6 @@ export function ResumeUpload({ onUpload, onFileSelect, onTextExtracted }: Resume
 
     // Clear any previous errors
     setError(null)
-  }
-
-  const handleChooseFile = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click()
-    }
   }
 
   const handleRetry = () => {

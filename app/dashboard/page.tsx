@@ -5,7 +5,7 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ArrowRight, Code } from "lucide-react"
+import { ArrowRight } from "lucide-react"
 import { ResumeUpload } from "@/components/resume-upload"
 import { JobDescriptionInput } from "@/components/job-description-input"
 import { RoleFocusSelect } from "@/components/role-focus-select"
@@ -47,63 +47,99 @@ export default function Dashboard() {
 
   // Update the useEffect hook to include data recovery
   useEffect(() => {
-    // Create a new session when the dashboard is loaded directly
-    if (window.location.pathname === "/dashboard" && !window.location.search.includes("keepSession")) {
-      forceNewSession()
-    }
+    try {
+      console.log("Dashboard mounted, initializing session")
 
-    // Try to recover any missing data and synchronize across sessions
-    synchronizeSessionData()
-    recoverMissingData()
+      // Create a new session when the dashboard is loaded directly
+      if (window.location.pathname === "/dashboard" && !window.location.search.includes("keepSession")) {
+        console.log("Creating new session")
+        forceNewSession()
+      }
+
+      // Try to recover any missing data and synchronize across sessions
+      synchronizeSessionData()
+      recoverMissingData()
+
+      console.log("Session initialization complete")
+    } catch (error) {
+      console.error("Error during dashboard initialization:", error)
+      // Show a toast notification for the error
+      toast({
+        title: "Initialization Error",
+        description: "There was a problem loading your session data. Please refresh the page.",
+        variant: "destructive",
+      })
+    }
   }, [])
 
   // Update the handleResumeUpload function to ensure data is properly stored
   const handleResumeUpload = (text) => {
-    // If text is a string, it's coming directly from the text input
-    const isTextOnly = typeof text === "string"
+    try {
+      console.log("Resume upload handler called")
 
-    if (isTextOnly) {
-      setResumeText(text)
+      // If text is a string, it's coming directly from the text input
+      const isTextOnly = typeof text === "string"
+      console.log("Is text only:", isTextOnly)
+
+      if (isTextOnly) {
+        setResumeText(text)
+        setFileUploaded(true)
+        setActiveStep(2)
+
+        // Validate the resume text
+        const results = validateResume(text)
+        setValidationResults(results)
+
+        // Store the validation results in session storage
+        try {
+          storeCompatibleAnalysisData("resumeAnalysis", results)
+          // Also store the raw text for potential reprocessing
+          storeCompatibleAnalysisData("resumeText", text)
+          console.log("Resume text stored successfully")
+        } catch (storageError) {
+          console.error("Error storing resume data:", storageError)
+        }
+
+        // Log detected skills to console
+        console.log("Resume Text Analysis Complete:")
+        console.log("Technical Skills:", results.skills?.technical || [])
+        console.log("Soft Skills:", results.skills?.soft || [])
+
+        return
+      }
+
+      // Otherwise, handle as before for file uploads
+      setResumeData(text)
       setFileUploaded(true)
-      setActiveStep(2)
+      if (text.analysis) {
+        setResumeAnalysis(text.analysis)
+        setShowSkillsSummary(true)
 
-      // Validate the resume text
-      const results = validateResume(text)
-      setValidationResults(results)
+        // Ensure the analysis is stored in session storage
+        try {
+          storeCompatibleAnalysisData("resumeAnalysis", text.analysis)
+          console.log("Resume analysis stored successfully")
+        } catch (storageError) {
+          console.error("Error storing resume analysis:", storageError)
+        }
 
-      // Store the validation results in session storage
-      storeCompatibleAnalysisData("resumeAnalysis", results)
-
-      // Also store the raw text for potential reprocessing
-      storeCompatibleAnalysisData("resumeText", text)
-
-      // Log detected skills to console
-      console.log("Resume Text Analysis Complete:")
-      console.log("Technical Skills:", results.skills?.technical || [])
-      console.log("Soft Skills:", results.skills?.soft || [])
-
-      return
-    }
-
-    // Otherwise, handle as before for file uploads
-    setResumeData(text)
-    setFileUploaded(true)
-    if (text.analysis) {
-      setResumeAnalysis(text.analysis)
-      setShowSkillsSummary(true)
-
-      // Ensure the analysis is stored in session storage
-      storeCompatibleAnalysisData("resumeAnalysis", text.analysis)
-
-      // Log detected skills to console
-      console.log("Resume Analysis Complete:")
-      console.log("Technical Skills:", text.analysis.skills?.technical || [])
-      console.log("Soft Skills:", text.analysis.skills?.soft || [])
-      console.log("Experience:", text.analysis.experience?.length || 0, "entries")
-      console.log("Education:", text.analysis.education?.length || 0, "entries")
-    }
-    if (text) {
-      setActiveStep(2)
+        // Log detected skills to console
+        console.log("Resume Analysis Complete:")
+        console.log("Technical Skills:", text.analysis.skills?.technical || [])
+        console.log("Soft Skills:", text.analysis.skills?.soft || [])
+        console.log("Experience:", text.analysis.experience?.length || 0, "entries")
+        console.log("Education:", text.analysis.education?.length || 0, "entries")
+      }
+      if (text) {
+        setActiveStep(2)
+      }
+    } catch (error) {
+      console.error("Error in handleResumeUpload:", error)
+      toast({
+        title: "Upload Error",
+        description: "There was a problem processing your resume. Please try again.",
+        variant: "destructive",
+      })
     }
   }
 

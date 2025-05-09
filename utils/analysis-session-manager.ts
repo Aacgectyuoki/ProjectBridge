@@ -2,6 +2,52 @@
  * Utility for managing analysis sessions and preventing data contamination
  */
 
+/**
+ * Safe localStorage wrapper that handles exceptions
+ */
+const safeStorage = {
+  getItem(key: string): string | null {
+    try {
+      if (typeof window === "undefined" || !window.localStorage) {
+        console.warn("localStorage not available")
+        return null
+      }
+      return localStorage.getItem(key)
+    } catch (error) {
+      console.error("Error accessing localStorage.getItem", error)
+      return null
+    }
+  },
+
+  setItem(key: string, value: string): boolean {
+    try {
+      if (typeof window === "undefined" || !window.localStorage) {
+        console.warn("localStorage not available")
+        return false
+      }
+      localStorage.setItem(key, value)
+      return true
+    } catch (error) {
+      console.error("Error accessing localStorage.setItem", error)
+      return false
+    }
+  },
+
+  removeItem(key: string): boolean {
+    try {
+      if (typeof window === "undefined" || !window.localStorage) {
+        console.warn("localStorage not available")
+        return false
+      }
+      localStorage.removeItem(key)
+      return true
+    } catch (error) {
+      console.error("Error accessing localStorage.removeItem", error)
+      return false
+    }
+  },
+}
+
 // Track if we've already created a session in this browser instance
 let sessionCreatedInThisInstance = false
 let currentSessionId = null
@@ -13,7 +59,7 @@ export function createAnalysisSession(): string {
 
   if (typeof window !== "undefined") {
     // Store the current session ID
-    localStorage.setItem("currentAnalysisSession", sessionId)
+    safeStorage.setItem("currentAnalysisSession", sessionId)
 
     // Also store in memory for consistent access
     currentSessionId = sessionId
@@ -39,7 +85,7 @@ export function getCurrentSessionId(): string {
     return currentSessionId
   }
 
-  let sessionId = localStorage.getItem("currentAnalysisSession")
+  let sessionId = safeStorage.getItem("currentAnalysisSession")
   if (!sessionId) {
     sessionId = createAnalysisSession()
   } else {
@@ -58,7 +104,7 @@ export function clearPreviousAnalysisData(): void {
   console.log("Clearing previous analysis data...")
 
   const keysToRemove = []
-  const currentSession = localStorage.getItem("currentAnalysisSession")
+  const currentSession = safeStorage.getItem("currentAnalysisSession")
 
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)
@@ -81,7 +127,7 @@ export function clearPreviousAnalysisData(): void {
     }
   }
 
-  keysToRemove.forEach((key) => localStorage.removeItem(key))
+  keysToRemove.forEach((key) => safeStorage.removeItem(key))
   console.log(`Cleared ${keysToRemove.length} previous analysis items`)
 }
 
@@ -119,7 +165,7 @@ export function clearAllAnalysisData(): void {
     }
   }
 
-  keysToRemove.forEach((key) => localStorage.removeItem(key))
+  keysToRemove.forEach((key) => safeStorage.removeItem(key))
   console.log(`Cleared ${keysToRemove.length} analysis items`)
 
   // Also clear our in-memory cache
@@ -134,12 +180,12 @@ export function storeAnalysisData(key: string, data: any): void {
   const sessionKey = `${sessionId}_${key}`
 
   try {
-    localStorage.setItem(sessionKey, JSON.stringify(data))
+    safeStorage.setItem(sessionKey, JSON.stringify(data))
     console.log(`Stored ${key} data in session ${sessionId}`)
 
     // Also store in legacy format for backward compatibility
     try {
-      localStorage.setItem(key, JSON.stringify(data))
+      safeStorage.setItem(key, JSON.stringify(data))
     } catch (error) {
       console.error("Failed to store legacy data:", error)
     }
@@ -156,10 +202,10 @@ export function getAnalysisData<T>(key: string, defaultValue: T): T {
   const sessionKey = `${sessionId}_${key}`
 
   try {
-    const data = localStorage.getItem(sessionKey)
+    const data = safeStorage.getItem(sessionKey)
     if (!data) {
       // Try legacy format as fallback
-      const legacyData = localStorage.getItem(key)
+      const legacyData = safeStorage.getItem(key)
       if (legacyData) {
         console.log(`Retrieved ${key} data from legacy storage`)
         return JSON.parse(legacyData)
@@ -181,7 +227,7 @@ export function getAnalysisData<T>(key: string, defaultValue: T): T {
 export function isSameAnalysisSession(sessionId: string): boolean {
   if (typeof window === "undefined") return false
 
-  const currentSessionId = localStorage.getItem("currentAnalysisSession")
+  const currentSessionId = safeStorage.getItem("currentAnalysisSession")
   return currentSessionId === sessionId
 }
 
@@ -204,7 +250,7 @@ export function storeCompatibleAnalysisData(key: string, data: any): void {
 
   // Also store in legacy format for backward compatibility
   try {
-    localStorage.setItem(key, JSON.stringify(data))
+    safeStorage.setItem(key, JSON.stringify(data))
   } catch (error) {
     console.error("Failed to store legacy data:", error)
   }
@@ -220,7 +266,7 @@ export function getCompatibleAnalysisData<T>(key: string, defaultValue: T): T {
 
   // Fall back to legacy format
   try {
-    const legacyData = localStorage.getItem(key)
+    const legacyData = safeStorage.getItem(key)
     if (legacyData) {
       console.log(`Retrieved ${key} data from legacy storage`)
       return JSON.parse(legacyData)
@@ -259,9 +305,9 @@ export function debugLogAllStoredData(): void {
   console.log("Total analysis-related items:", analysisKeys.length)
   analysisKeys.forEach((key) => {
     try {
-      console.log(`${key}:`, JSON.parse(localStorage.getItem(key) || "null"))
+      console.log(`${key}:`, JSON.parse(safeStorage.getItem(key) || "null"))
     } catch (e) {
-      console.log(`${key}: [Error parsing JSON]`, localStorage.getItem(key))
+      console.log(`${key}: [Error parsing JSON]`, safeStorage.getItem(key))
     }
   })
 
@@ -278,7 +324,7 @@ export function hasSessionData(key: string): boolean {
   const sessionKey = `${sessionId}_${key}`
 
   // Check both session-specific and legacy storage
-  return localStorage.getItem(sessionKey) !== null || localStorage.getItem(key) !== null
+  return safeStorage.getItem(sessionKey) !== null || safeStorage.getItem(key) !== null
 }
 
 // Synchronize data between sessions to prevent data loss
@@ -316,13 +362,13 @@ export function synchronizeSessionData(): void {
       if (sessionId === currentSession) return
 
       const otherSessionKey = `${sessionId}_${key}`
-      const data = localStorage.getItem(otherSessionKey)
+      const data = safeStorage.getItem(otherSessionKey)
 
       if (data) {
         console.log(`Copying ${key} data from session ${sessionId} to current session`)
-        localStorage.setItem(`${currentSession}_${key}`, data)
+        safeStorage.setItem(`${currentSession}_${key}`, data)
         // Also update legacy storage
-        localStorage.setItem(key, data)
+        safeStorage.setItem(key, data)
       }
     })
   })
@@ -355,7 +401,7 @@ export function recoverMissingData(): void {
       // If this key contains our data key (e.g., "somePrefix_resumeAnalysis_someSuffix")
       if (storageKey.includes(key)) {
         try {
-          const data = localStorage.getItem(storageKey)
+          const data = safeStorage.getItem(storageKey)
           if (!data) continue
 
           // Try to parse it as JSON to validate
@@ -366,9 +412,9 @@ export function recoverMissingData(): void {
           const sessionKey = `${sessionId}_${key}`
 
           console.log(`Recovered ${key} data from ${storageKey}`)
-          localStorage.setItem(sessionKey, data)
+          safeStorage.setItem(sessionKey, data)
           // Also update legacy storage
-          localStorage.setItem(key, data)
+          safeStorage.setItem(key, data)
 
           // Break once we've found valid data
           break
@@ -399,7 +445,7 @@ export function getEnhancedAnalysisData<T>(key: string, defaultValue: T): T {
     if (!storageKey || !storageKey.includes(key)) continue
 
     try {
-      const data = localStorage.getItem(storageKey)
+      const data = safeStorage.getItem(storageKey)
       if (!data) continue
 
       const parsed = JSON.parse(data)

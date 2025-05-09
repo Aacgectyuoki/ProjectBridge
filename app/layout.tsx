@@ -5,6 +5,8 @@ import { Inter } from "next/font/google"
 import { AnalysisStateProvider } from "@/components/analysis-state-provider"
 import { ResponsiveNavbar } from "@/components/responsive-navbar"
 import * as Sentry from "@sentry/nextjs"
+import { GlobalErrorBoundary } from "@/components/global-error-boundary"
+import { ThemeProvider } from "@/components/theme-provider"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -41,10 +43,14 @@ export default function RootLayout({
     <html lang="en" className="h-full">
       <body className={`${inter.className} h-full`}>
         <AnalysisStateProvider>
-          <div className="flex flex-col min-h-screen">
-            <ResponsiveNavbar />
-            <main className="flex-grow pt-16">{children}</main>
-          </div>
+          <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+            <GlobalErrorBoundary>
+              <div className="flex flex-col min-h-screen">
+                <ResponsiveNavbar />
+                <main className="flex-grow pt-16">{children}</main>
+              </div>
+            </GlobalErrorBoundary>
+          </ThemeProvider>
         </AnalysisStateProvider>
       </body>
     </html>

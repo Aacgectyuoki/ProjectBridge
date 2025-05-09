@@ -3,6 +3,35 @@ import type { ProgressCallback } from "@/types/file-processing"
 import { extractTextFromPDF, extractPDFMetadata, isPDFScanned, isPDFEncrypted } from "./pdf-text-extractor"
 import { handleError, ErrorCategory, ErrorSeverity } from "./error-handler"
 
+/**
+ * Check if we're running in a browser environment
+ */
+function isBrowser(): boolean {
+  return typeof window !== "undefined" && typeof document !== "undefined"
+}
+
+/**
+ * Check if the File API is supported
+ */
+function isFileAPISupported(): boolean {
+  return isBrowser() && "File" in window && "FileReader" in window
+}
+
+/**
+ * Log detailed environment information for debugging
+ */
+function logEnvironmentInfo(): void {
+  if (!isBrowser()) {
+    console.log("Not running in browser environment")
+    return
+  }
+
+  console.log("Browser environment detected")
+  console.log("File API supported:", isFileAPISupported())
+  console.log("User Agent:", navigator.userAgent)
+  console.log("PDF.js supported:", typeof window["pdfjs"] !== "undefined")
+}
+
 // Maximum file size in bytes (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 
@@ -27,6 +56,8 @@ export enum FileProcessingErrorType {
   INVALID_FILE = "invalid_file",
   SCANNED_DOCUMENT = "scanned_document",
   OCR_FAILED = "ocr_failed",
+  ENVIRONMENT_ERROR = "environment_error",
+  BROWSER_COMPATIBILITY = "browser_compatibility",
 }
 
 /**
@@ -82,6 +113,25 @@ export function validateFile(file: File): { valid: boolean; message?: string; er
  * Process a file and extract its text content
  */
 export async function processFile(file: File, onProgress?: ProgressCallback): Promise<string> {
+  // Log environment information
+  logEnvironmentInfo()
+
+  // Check if we're in a browser environment
+  if (!isBrowser()) {
+    throw new FileProcessingError(
+      "File processing is only available in browser environments",
+      FileProcessingErrorType.ENVIRONMENT_ERROR,
+    )
+  }
+
+  // Check if File API is supported
+  if (!isFileAPISupported()) {
+    throw new FileProcessingError(
+      "Your browser does not support the File API required for file processing",
+      FileProcessingErrorType.BROWSER_COMPATIBILITY,
+    )
+  }
+
   try {
     if (!file) {
       const error = new FileProcessingError("No file provided", FileProcessingErrorType.INVALID_FILE)
