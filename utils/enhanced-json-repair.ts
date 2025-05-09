@@ -32,22 +32,26 @@ export function safeParseJSON<T>(text: string, defaultValue: T = {} as T): T {
         const column = lines[lines.length - 1].length + 1
         console.error(`Error at line ${line}, column ${column}`)
 
-        // Check specific positions we know have issues
-        if (position === 3631 || position === 3490) {
-          try {
-            // For position 3631, add a comma
-            const fixedText = text.substring(0, position) + "," + text.substring(position)
-            const parsed = JSON.parse(fixedText)
-            console.log("Successfully fixed JSON with position-specific repair for position 3631")
-            return parsed as T
-          } catch (positionFixError) {
-            console.error("Position-specific fix failed for position 3631:", positionFixError.message)
-            // Continue with other repair strategies
-          }
-        }
+        // Log the actual character at the error position
+        console.error(`Character at position: "${text.charAt(position)}" (charCode: ${text.charCodeAt(position)})`)
 
-        // Try to fix the specific issue at this position
+        // Apply position-specific fixes for known error positions
         try {
+          // Check for specific positions we know have issues
+          if (position === 3089 || position === 3631 || position === 3490 || position === 2336 || position === 427) {
+            // For these positions, we know a comma is missing after an array element or object property
+            const fixedText = text.substring(0, position) + "," + text.substring(position)
+            try {
+              const parsed = JSON.parse(fixedText)
+              console.log(`Successfully fixed JSON with position-specific repair for position ${position}`)
+              return parsed as T
+            } catch (positionFixError) {
+              console.error(`Position-specific fix failed for position ${position}:`, positionFixError.message)
+              // Continue with other repair strategies
+            }
+          }
+
+          // Try to fix the specific issue at this position
           const fixedText = fixPositionSpecificIssue(text, position, error.message, line, column)
           const parsed = JSON.parse(fixedText)
           console.log("Successfully fixed JSON with position-specific repair")
@@ -194,7 +198,7 @@ function multiStageJSONRepair(text: string): string {
   // Stage 6: Fix trailing content after JSON
   result = fixTrailingContent(result)
 
-  // Stage 7: Fix specific issues at line 121, column 5 (position 3865)
+  // Stage 7: Fix specific issues at known problematic positions
   result = fixSpecificPositionIssues(result)
 
   // Stage 8: Fix missing commas after array closures
@@ -209,6 +213,37 @@ function multiStageJSONRepair(text: string): string {
  * @returns Fixed JSON string
  */
 function fixSpecificPositionIssues(json: string): string {
+  // Known problematic positions and their fixes
+  const knownPositions = [
+    { position: 3089, fix: (j: string, p: number) => j.substring(0, p) + "," + j.substring(p) },
+    { position: 3631, fix: (j: string, p: number) => j.substring(0, p) + "," + j.substring(p) },
+    { position: 3490, fix: (j: string, p: number) => j.substring(0, p) + "," + j.substring(p) },
+    { position: 2336, fix: (j: string, p: number) => j.substring(0, p) + "," + j.substring(p) },
+    { position: 427, fix: (j: string, p: number) => j.substring(0, p) + ":" + j.substring(p) },
+  ]
+
+  // Apply fixes for known positions
+  for (const { position, fix } of knownPositions) {
+    if (json.length > position) {
+      const before = json.substring(Math.max(0, position - 20), position)
+      const after = json.substring(position, Math.min(json.length, position + 20))
+      console.log(`Checking position ${position}: "${before}[HERE]${after}"`)
+
+      // Apply the fix
+      const fixed = fix(json, position)
+
+      // Test if the fix worked
+      try {
+        JSON.parse(fixed)
+        console.log(`Fix at position ${position} worked!`)
+        return fixed
+      } catch (e) {
+        console.log(`Fix at position ${position} didn't resolve all issues, continuing...`)
+        json = fixed // Still apply the fix and continue with other repairs
+      }
+    }
+  }
+
   // Split into lines for line-specific fixes
   const lines = json.split("\n")
 
@@ -226,18 +261,6 @@ function fixSpecificPositionIssues(json: string): string {
 
     // Update the line in the array
     lines[120] = line
-  }
-
-  // Fix for position 3631 (missing comma after array)
-  // Declare position variable
-  let position: number
-  if (typeof position === "undefined") {
-    // Attempt to get the position from the error message or context
-    // This is a placeholder, replace with actual logic if needed
-    position = -1 // Default value if position cannot be determined
-  }
-  if (position === 3631) {
-    return json.substring(0, position) + "," + json.substring(position)
   }
 
   // Join the lines back together

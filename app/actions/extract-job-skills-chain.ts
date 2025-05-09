@@ -11,6 +11,8 @@ import { SkillsLogger } from "@/utils/skills-logger"
 import { safeParseJSON, extractJsonFromText } from "@/utils/enhanced-json-repair"
 import { withRetry, isRateLimitError } from "@/utils/api-rate-limit-handler"
 import { repairJSON } from "@/utils/repair-json"
+// Import the new fallback extraction function
+import { extractSkillsFromJobDescription } from "@/utils/fallback-skill-extraction"
 
 // Default empty skills structure
 const defaultSkills: ExtractedSkills = {
@@ -188,6 +190,7 @@ export async function extractJobSkillsChain(jobDescription: string): Promise<{
 }
 
 // Function to extract skills from a job description directly (no chunking)
+// Update the extractJobSkillsDirect function to use our new fallback
 async function extractJobSkillsDirect(
   jobDescription: string,
   skillsParser: OutputParser<ExtractedSkills>,
@@ -205,8 +208,22 @@ async function extractJobSkillsDirect(
   chain.addStep(async (input) => {
     // Format the prompt
     const prompt = jobSkillExtractionPrompt.format({ text: input })
-    const system =
-      "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'. Ensure all property values are followed by commas when needed."
+
+    // Enhanced system message with explicit JSON formatting instructions
+    const system = `You are a JSON-only response bot specialized in skill extraction. 
+    You must ONLY return valid JSON with no explanatory text. 
+    Your response must start with '{' and end with '}'. 
+    Follow these critical rules:
+    1. Use double quotes for all property names and string values
+    2. Ensure all array elements are properly separated by commas
+    3. Do not include trailing commas after the last item in arrays or objects
+    4. Do not include any text, comments, or explanations outside the JSON structure
+    5. If a category has no skills, return an empty array for that category
+    6. Validate your JSON structure before returning it
+    
+    Example of valid response format:
+    {"technical":["skill1","skill2"],"soft":["skill1"],"tools":[],"frameworks":[]}
+    `
 
     try {
       // Try different models in sequence
@@ -231,25 +248,16 @@ async function extractJobSkillsDirect(
         }
       }
 
-      // If no JSON-like content was found, create a default JSON structure
-      console.log("No JSON-like content found in response, creating default structure")
-
-      // Try to extract skills from text using regex patterns
-      const extractedSkills = extractSkillsFromText(text)
-
-      // If we extracted some skills, use them
-      if (Object.values(extractedSkills).some((arr) => arr.length > 0)) {
-        console.log("Successfully extracted some skills using regex patterns")
-        return JSON.stringify(extractedSkills)
-      }
-
-      // Last resort: return default skills structure
-      console.log("Falling back to default skills structure")
-      return JSON.stringify(defaultSkills)
+      // If no JSON-like content was found, use our fallback extraction
+      console.log("No JSON-like content found in response, using fallback extraction")
+      const extractedSkills = extractSkillsFromJobDescription(input)
+      return JSON.stringify(extractedSkills)
     } catch (error) {
       console.error("Error generating text with all models:", error)
-      // Return a simple JSON structure that will parse correctly
-      return JSON.stringify(defaultSkills)
+      // Use our fallback extraction as a last resort
+      console.log("Error in LLM processing, using fallback extraction")
+      const extractedSkills = extractSkillsFromJobDescription(input)
+      return JSON.stringify(extractedSkills)
     }
   }, "generate-skills-text")
 

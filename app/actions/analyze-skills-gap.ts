@@ -5,6 +5,16 @@ import { generateText } from "ai"
 import { groq } from "@ai-sdk/groq"
 import { handleError, ErrorCategory, ErrorSeverity, withRetryAndErrorHandling } from "@/utils/error-handler"
 import { SkillsGapAnalysisError, SkillsGapAnalysisErrorType } from "@/types/skills-gap-analysis-error"
+import { safeParseJSON } from "@/utils/enhanced-json-repair"
+
+// Import the new utility at the top of the file
+import { extractMissingSkillsFromSummary, extractTechnologiesFromSummary } from "@/utils/summary-skill-extractor"
+
+// Import the validator at the top of the file
+import { logSkillsGapValidation } from "@/utils/skills-gap-validator"
+
+// Import the job description skill extractor at the top of the file
+import { extractMissingSkillsFromJobDescription } from "@/utils/job-description-skill-extractor"
 
 export type SkillGapAnalysisResult = {
   matchPercentage: number
@@ -138,91 +148,99 @@ export async function analyzeSkillsGapFromResults(
     try {
       // Prepare the prompt for skill gap analysis
       const prompt = `
-        You are a skilled career advisor with expertise in analyzing skills gaps between a candidate's resume and job requirements.
-        
-        Resume Skills:
-        ${JSON.stringify(resumeSkills, null, 2)}
-        
-        Job Required Skills:
-        ${JSON.stringify(jobRequiredSkills, null, 2)}
-        
-        Job Preferred Skills:
-        ${JSON.stringify(jobPreferredSkills, null, 2)}
-        
-        Job Title: ${jobAnalysis.title || "Unknown Position"}
-        
-        Job Responsibilities:
-        ${JSON.stringify(jobAnalysis.responsibilities || [], null, 2)}
-        
-        Job Qualifications:
-        ${JSON.stringify(jobAnalysis.qualifications || {}, null, 2)}
-        
-        Job Experience Requirements:
-        ${JSON.stringify(jobAnalysis.experience || {}, null, 2)}
-        
-        Resume Experience:
-        ${JSON.stringify(resumeAnalysis.experience || [], null, 2)}
-        
-        Resume Education:
-        ${JSON.stringify(resumeAnalysis.education || [], null, 2)}
-        
-        Based on the above information, analyze the skills gap between the candidate's resume and the job requirements.
-        Be specific and detailed in your analysis. Focus on the actual skills in the resume and job description.
-        
-        IMPORTANT: You MUST identify specific matched skills from the resume that align with the job requirements.
-        IMPORTANT: You MUST identify specific missing skills that are required or preferred for the job but not found in the resume.
-        
-        Return a JSON object with the following structure:
-        {
-          "matchPercentage": 75,
-          "missingSkills": [
-            {
-              "name": "Skill Name",
-              "level": "Beginner/Intermediate/Advanced",
-              "priority": "High/Medium/Low",
-              "context": "Why this skill is important for the role"
-            }
-          ],
-          "missingQualifications": [
-            {
-              "description": "Qualification description",
-              "importance": "Required/Preferred",
-              "alternative": "Alternative qualification or experience"
-            }
-          ],
-          "missingExperience": [
-            {
-              "area": "Experience area",
-              "yearsNeeded": "Years needed",
-              "suggestion": "How to gain this experience"
-            }
-          ],
-          "matchedSkills": [
-            {
-              "name": "Skill Name",
-              "proficiency": "Beginner/Intermediate/Advanced",
-              "relevance": "High/Medium/Low"
-            }
-          ],
-          "recommendations": [
-            {
-              "type": "Project/Course/Certification",
-              "description": "Detailed description",
-              "timeToAcquire": "Estimated time",
-              "priority": "High/Medium/Low"
-            }
-          ],
-          "summary": "A brief summary of the skills gap analysis that specifically mentions the job title and key skills"
-        }
-        
-        IMPORTANT: Your response must be ONLY the JSON object, with no additional text before or after.
-        Make sure all property names and string values are properly quoted.
-        Do not use trailing commas.
-        Ensure all arrays and objects are properly closed.
-        Always use colons after property names.
-        Do not include any explanations or notes outside the JSON structure.
-        Format the JSON properly with correct indentation and line breaks.
-      `
+  You are a skilled career advisor with expertise in analyzing skills gaps between a candidate's resume and job requirements.
+  
+  Resume Skills:
+  ${JSON.stringify(resumeSkills, null, 2)}
+  
+  Job Required Skills:
+  ${JSON.stringify(jobRequiredSkills, null, 2)}
+  
+  Job Preferred Skills:
+  ${JSON.stringify(jobPreferredSkills, null, 2)}
+  
+  Job Title: ${jobAnalysis.title || "Unknown Position"}
+  
+  Job Responsibilities:
+  ${JSON.stringify(jobAnalysis.responsibilities || [], null, 2)}
+  
+  Job Qualifications:
+  ${JSON.stringify(jobAnalysis.qualifications || {}, null, 2)}
+  
+  Job Experience Requirements:
+  ${JSON.stringify(jobAnalysis.experience || {}, null, 2)}
+  
+  Resume Experience:
+  ${JSON.stringify(resumeAnalysis.experience || [], null, 2)}
+  
+  Resume Education:
+  ${JSON.stringify(resumeAnalysis.education || [], null, 2)}
+  
+  Based on the above information, analyze the skills gap between the candidate's resume and the job requirements.
+  Be specific and detailed in your analysis. Focus on the actual skills in the resume and job description.
+  
+  IMPORTANT: You MUST identify specific matched skills from the resume that align with the job requirements.
+  IMPORTANT: You MUST identify specific missing skills that are required or preferred for the job but not found in the resume.
+  
+  Return a JSON object with the following structure:
+  {
+    "matchPercentage": 75,
+    "missingSkills": [
+      {
+        "name": "Skill Name",
+        "level": "Beginner/Intermediate/Advanced",
+        "priority": "High/Medium/Low",
+        "context": "Why this skill is important for the role"
+      }
+    ],
+    "missingQualifications": [
+      {
+        "description": "Qualification description",
+        "importance": "Required/Preferred",
+        "alternative": "Alternative qualification or experience"
+      }
+    ],
+    "missingExperience": [
+      {
+        "area": "Experience area",
+        "yearsNeeded": "Years needed",
+        "suggestion": "How to gain this experience"
+      }
+    ],
+    "matchedSkills": [
+      {
+        "name": "Skill Name",
+        "proficiency": "Beginner/Intermediate/Advanced",
+        "relevance": "High/Medium/Low"
+      }
+    ],
+    "recommendations": [
+      {
+        "type": "Project/Course/Certification",
+        "description": "Detailed description",
+        "timeToAcquire": "Estimated time",
+        "priority": "High/Medium/Low"
+      }
+    ],
+    "summary": "A brief summary of the skills gap analysis that specifically mentions the job title and key skills"
+  }
+  
+  CRITICAL INSTRUCTIONS:
+  1. EVERY skill mentioned in your summary MUST also appear in either matchedSkills or missingSkills arrays
+  2. If you mention a skill is missing in the summary, you MUST include it in the missingSkills array
+  3. If you mention a skill is matched in the summary, you MUST include it in the matchedSkills array
+  4. NEVER leave missingSkills empty if you mention missing skills in the summary
+  5. Include at least 1-3 actionable recommendations for learning missing skills
+  6. Do not include non-learnable items like "years of experience" or "degrees" in recommendations
+  
+  IMPORTANT: Your response must be ONLY the JSON object, with no additional text before or after.
+  Make sure all property names and string values are properly quoted.
+  Do not use trailing commas.
+  Ensure all arrays and objects are properly closed.
+  Always use colons after property names.
+  Do not include any explanations or notes outside the JSON structure.
+  Format the JSON properly with correct indentation and line breaks.
+`
 
       // Generate the analysis with retry and error handling
       const { text: responseText } = await withRetryAndErrorHandling(
@@ -260,41 +278,19 @@ export async function analyzeSkillsGapFromResults(
         cleanedResponse = cleanedResponse.substring(0, lastBrace + 1)
       }
 
-      // Apply enhanced JSON repair to fix common issues
-      let fixedResponse = fixMissingColons(cleanedResponse)
-      fixedResponse = lineByLineJSONRepair(fixedResponse)
-      fixedResponse = fixArrayFollowedByProperty(fixedResponse)
-
-      // Try direct parsing first with a try/catch
+      // Use our enhanced JSON repair utility to parse the response
       try {
-        const directParsed = JSON.parse(fixedResponse)
-        console.log("Successfully parsed JSON directly")
+        const parsedResult = safeParseJSON<SkillGapAnalysisResult>(cleanedResponse, defaultSkillGapAnalysisResult)
+        console.log("Successfully parsed JSON with enhanced repair")
 
         // Ensure the result has the expected structure
-        const validatedResult = ensureValidStructure(directParsed)
+        const validatedResult = ensureValidStructure(parsedResult, jobAnalysis)
 
-        // If the result has empty arrays, use the fallback data
-        if (
-          validatedResult.matchedSkills.length === 0 &&
-          validatedResult.missingSkills.length === 0 &&
-          fallbackAnalysis
-        ) {
-          console.log("AI returned empty arrays, using data-driven fallback analysis")
+        // Add validation logging
+        logSkillsGapValidation(validatedResult)
 
-          // Merge the AI summary with our data-driven analysis if the AI summary is meaningful
-          if (validatedResult.summary && validatedResult.summary !== defaultSkillGapAnalysisResult.summary) {
-            fallbackAnalysis.summary = validatedResult.summary
-          }
-
-          // Store the result in localStorage
-          if (typeof localStorage !== "undefined") {
-            const sessionId = localStorage.getItem("currentAnalysisSession") || "unknown_session"
-            localStorage.setItem(`skillGapAnalysis_${sessionId}`, JSON.stringify(fallbackAnalysis))
-            console.log("Stored fallback skillGapAnalysis data in session", sessionId)
-          }
-
-          return fallbackAnalysis
-        }
+        // Filter out non-learnable recommendations
+        validatedResult.recommendations = filterRecommendations(validatedResult.recommendations)
 
         // Store the result in localStorage
         if (typeof localStorage !== "undefined") {
@@ -304,13 +300,16 @@ export async function analyzeSkillsGapFromResults(
         }
 
         return validatedResult
-      } catch (directParseError) {
-        handleError(directParseError as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: false })
-        console.error("Direct JSON parse failed:", (directParseError as Error).message)
+      } catch (parseError) {
+        handleError(parseError as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: false })
+        console.error("Enhanced JSON parse failed:", (parseError as Error).message)
 
         // If parsing fails, use our data-driven fallback
         if (fallbackAnalysis) {
           console.log("JSON parsing failed, using data-driven fallback analysis")
+
+          // Filter the fallback recommendations
+          fallbackAnalysis.recommendations = filterRecommendations(fallbackAnalysis.recommendations)
 
           // Store the result in localStorage
           if (typeof localStorage !== "undefined") {
@@ -321,13 +320,14 @@ export async function analyzeSkillsGapFromResults(
 
           return fallbackAnalysis
         }
-
-        // Continue to enhanced parsing if fallback is not available
       }
 
       // If all parsing strategies fail, use our data-driven fallback
       if (fallbackAnalysis) {
         console.log("All JSON parsing strategies failed, using data-driven fallback analysis")
+
+        // Filter the fallback recommendations
+        fallbackAnalysis.recommendations = filterRecommendations(fallbackAnalysis.recommendations)
 
         // Store the result in localStorage
         if (typeof localStorage !== "undefined") {
@@ -353,6 +353,10 @@ export async function analyzeSkillsGapFromResults(
       // If AI fails, use our data-driven fallback
       if (fallbackAnalysis) {
         console.log("AI request failed, using data-driven fallback analysis")
+
+        // Filter the fallback recommendations
+        fallbackAnalysis.recommendations = filterRecommendations(fallbackAnalysis.recommendations)
+
         return fallbackAnalysis
       }
 
@@ -369,6 +373,56 @@ export async function analyzeSkillsGapFromResults(
 
     return defaultSkillGapAnalysisResult
   }
+}
+
+/**
+ * Filter out non-learnable recommendations
+ * @param recommendations Array of recommendations
+ * @returns Filtered recommendations
+ */
+function filterRecommendations(recommendations: any[]): any[] {
+  // Patterns that indicate non-learnable items
+  const nonLearnablePatterns = [
+    /degree/i,
+    /years of experience/i,
+    /certification/i,
+    /experience in/i,
+    /bachelor/i,
+    /master/i,
+    /phd/i,
+    /mba/i,
+  ]
+
+  // Filter out recommendations that match non-learnable patterns
+  const filteredRecommendations = recommendations.filter((rec) => {
+    return !nonLearnablePatterns.some((pattern) => pattern.test(rec.description))
+  })
+
+  // If we filtered out all recommendations, generate some generic ones
+  if (filteredRecommendations.length === 0 && recommendations.length > 0) {
+    return [
+      {
+        type: "Course",
+        description: "Take online courses in relevant technical skills",
+        timeToAcquire: "1-3 months",
+        priority: "High",
+      },
+      {
+        type: "Project",
+        description: "Build portfolio projects to demonstrate skills",
+        timeToAcquire: "2-4 months",
+        priority: "High",
+      },
+      {
+        type: "Practice",
+        description: "Practice with real-world examples and case studies",
+        timeToAcquire: "Ongoing",
+        priority: "Medium",
+      },
+    ]
+  }
+
+  return filteredRecommendations
 }
 
 /**
@@ -462,12 +516,15 @@ function generateDataDrivenAnalysis(
   const matchPercentage = totalSkills > 0 ? Math.round((matchedCount / totalSkills) * 100) : 0
 
   // Generate recommendations based on missing skills
-  const recommendations = missingSkills.slice(0, 3).map((skill) => ({
+  let recommendations = missingSkills.slice(0, 3).map((skill) => ({
     type: "Course",
     description: `Learn ${skill.name} through online courses or tutorials`,
     timeToAcquire: "1-3 months",
     priority: skill.priority,
   }))
+
+  // Filter out non-learnable recommendations
+  recommendations = filterRecommendations(recommendations)
 
   // Generate missing qualifications based on job requirements
   const missingQualifications = []
@@ -529,176 +586,9 @@ function generateDataDrivenAnalysis(
 }
 
 /**
- * Fix specific issues at known problematic positions
- * @param json JSON string to fix
- * @param position Error position
- * @param line Error line
- * @param column Error column
- * @returns Fixed JSON string
- */
-function fixSpecificPositionIssues(json: string, position: number, line: number, column: number): string {
-  // Split into lines for line-specific fixes
-  const lines = json.split("\n")
-
-  // Fix for line 18 (0-indexed would be 17)
-  if (lines.length > 17) {
-    // Get the problematic line
-    let problematicLine = lines[17]
-
-    console.log(`Fixing line ${line} (index ${line - 1}): "${problematicLine}"`)
-
-    // Look for property names without colons around column 22
-    if (column >= 20 && column <= 25) {
-      // Try to find a property name without a colon
-      const beforeColumn = problematicLine.substring(0, column - 1)
-      const afterColumn = problematicLine.substring(column - 1)
-
-      console.log(`Before column: "${beforeColumn}"`)
-      console.log(`After column: "${afterColumn}"`)
-
-      // Check if there's a property name ending just before the column
-      const propertyMatch = beforeColumn.match(/"([^"]*)"\s*$/)
-      if (propertyMatch) {
-        // Found a property name without a colon, add the colon
-        problematicLine = beforeColumn + ":" + afterColumn
-        console.log(`Fixed line: "${problematicLine}"`)
-      }
-    }
-
-    // Apply general fixes to the problematic line
-    problematicLine = fixMissingColons(problematicLine)
-
-    // Update the line in the array
-    lines[17] = problematicLine
-  }
-
-  // Join the lines back together
-  return lines.join("\n")
-}
-
-/**
- * Fix position-specific issue in JSON
- * @param json JSON string to fix
- * @param position Error position
- * @returns Fixed JSON string
- */
-function fixPositionSpecificIssue(json: string, position: number): string {
-  try {
-    // Get context around the error (100 chars before and after)
-    const start = Math.max(0, position - 100)
-    const end = Math.min(json.length, position + 100)
-    const context = json.substring(start, end)
-
-    console.log(`JSON error context around position ${position}: "${context}"`)
-
-    // Check if the error is at position 427
-    if (position === 427) {
-      // For position 427, we know it's a missing colon after a property name
-      // Insert a colon at the position
-      return json.substring(0, position) + ":" + json.substring(position)
-    }
-
-    // Check if the error is at position 3631 (missing comma after recommendations array)
-    if (position === 3631 || position === 3490) {
-      console.log("Applying specific fix for position 3631/3490 - missing comma after array")
-      // Add a comma at the position
-      return json.substring(0, position) + "," + json.substring(position)
-    }
-
-    // For other positions, try to determine what's needed
-    const beforeError = json.substring(Math.max(0, position - 50), position)
-    const afterError = json.substring(position, Math.min(json.length, position + 50))
-
-    // Check if there's a property name ending just before the position
-    const propertyMatch = beforeError.match(/"([^"]*)"\s*$/)
-    if (propertyMatch) {
-      // Found a property name without a colon, add the colon
-      return json.substring(0, position) + ":" + json.substring(position)
-    }
-
-    // If we can't determine a specific fix, return the original
-    return json
-  } catch (error) {
-    console.error("Error in fixPositionSpecificIssue:", error)
-    return json // Return original if repair fails
-  }
-}
-
-// Helper function to fix missing colons in JSON
-function fixMissingColons(json: string): string {
-  // Find property names that aren't followed by a colon
-  let result = json.replace(/("(?:\\.|[^"\\])*")(\s*)([^:\s,}])/g, "$1:$2$3")
-
-  // Specifically target property names followed by another property name (missing colon between them)
-  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)("(?:\\.|[^"\\])*")\s*:/g, "$1: $3:")
-
-  // Fix property names followed by an array without a colon
-  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\[)/g, "$1: $3")
-
-  // Fix property names followed by an object without a colon
-  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\{)/g, "$1: $3")
-
-  // Fix property names followed by numbers without a colon
-  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(\d+)/g, "$1: $3")
-
-  // Fix property names followed by boolean values without a colon
-  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(true|false)/g, "$1: $3")
-
-  // Fix property names followed by null without a colon
-  result = result.replace(/("(?:\\.|[^"\\])*")(\s+)(null)/g, "$1: $3")
-
-  // Fix property names at the end of a line followed by a value at the start of the next line
-  result = result.replace(/("(?:\\.|[^"\\])*")\s*\n\s*([^\s:,}])/g, "$1: $2")
-
-  // Fix property names at the end of a line followed by a string at the start of the next line
-  result = result.replace(/("(?:\\.|[^"\\])*")\s*\n\s*"/g, '$1: "')
-
-  return result
-}
-
-/**
- * Line-by-line JSON repair for handling complex nested structures
- * @param text JSON text to repair
- * @returns Repaired JSON text
- */
-function lineByLineJSONRepair(text: string): string {
-  const lines = text.split("\n")
-  const repairedLines = lines.map((line, index) => {
-    // Skip empty lines
-    if (line.trim() === "") return line
-
-    // Fix missing colons in property names
-    line = line.replace(/("(?:\\.|[^"\\])*")(\s*)([^:\s,}])/g, "$1:$2$3")
-
-    // Fix property names that aren't properly quoted
-    line = line.replace(/(\{|,)\s*([a-zA-Z0-9_]+)\s*:/g, '$1"$2":')
-
-    // Fix trailing commas at the end of objects or arrays
-    if (line.trim().endsWith(",") && (lines[index + 1] || "").trim().match(/^\s*[\]}]/)) {
-      line = line.replace(/,\s*$/, "")
-    }
-
-    return line
-  })
-
-  return repairedLines.join("\n")
-}
-
-/**
- * Fix array followed by another property without a comma
- * @param json JSON string to fix
- * @returns Fixed JSON string
- */
-function fixArrayFollowedByProperty(json: string): string {
-  // Specifically look for the pattern where a property follows an array closing without a comma
-  // This pattern is common in the recommendations array followed by summary
-  return json.replace(/(\])\s*("([^"]+)"):/g, "$1,\n$2:")
-}
-
-/**
  * Ensure the result has the expected structure
  */
-function ensureValidStructure(result: any): SkillGapAnalysisResult {
+function ensureValidStructure(result: any, jobAnalysis?: JobAnalysisResult): SkillGapAnalysisResult {
   try {
     // Start with the default structure
     const validatedResult: SkillGapAnalysisResult = {
@@ -757,6 +647,68 @@ function ensureValidStructure(result: any): SkillGapAnalysisResult {
     if (typeof result.summary === "string") {
       validatedResult.summary = result.summary
     }
+
+    // NEW CODE: Extract missing skills from summary if the array is empty
+    if (validatedResult.missingSkills.length === 0 && validatedResult.summary) {
+      console.log("Extracting missing skills from summary as missingSkills array is empty")
+
+      // Get matched skill names for filtering
+      const matchedSkillNames = validatedResult.matchedSkills.map((skill) => skill.name)
+
+      // Extract missing skills from summary
+      const extractedSkills = extractMissingSkillsFromSummary(validatedResult.summary, matchedSkillNames)
+
+      if (extractedSkills.length > 0) {
+        console.log(`Extracted ${extractedSkills.length} missing skills from summary:`, extractedSkills)
+        validatedResult.missingSkills = extractedSkills
+      } else {
+        // If no skills were extracted using patterns, try technology extraction
+        const technologies = extractTechnologiesFromSummary(validatedResult.summary)
+
+        // Filter out technologies that are already in matched skills
+        const missingTechnologies = technologies.filter(
+          (tech) =>
+            !matchedSkillNames.some(
+              (skill) =>
+                skill.toLowerCase() === tech.toLowerCase() ||
+                skill.toLowerCase().includes(tech.toLowerCase()) ||
+                tech.toLowerCase().includes(tech.toLowerCase()),
+            ),
+        )
+
+        if (missingTechnologies.length > 0) {
+          console.log(`Extracted ${missingTechnologies.length} missing technologies from summary:`, missingTechnologies)
+          validatedResult.missingSkills = missingTechnologies.map((tech) => ({
+            name: tech,
+            level: "Intermediate",
+            priority: "Medium",
+            context: `Mentioned in analysis summary as a required technology.`,
+          }))
+        }
+      }
+    }
+
+    if (validatedResult.missingSkills.length === 0) {
+      // If we still don't have missing skills, try extracting from job description
+      console.log("Extracting missing skills from job description as missingSkills array is still empty")
+
+      // Get matched skill names for filtering
+      const matchedSkillNames = validatedResult.matchedSkills.map((skill) => skill.name)
+
+      // We need to pass the job analysis, so make sure it's available in this scope
+      // This might require restructuring to pass jobAnalysis to ensureValidStructure
+      if (jobAnalysis) {
+        const extractedFromJD = extractMissingSkillsFromJobDescription(jobAnalysis, matchedSkillNames)
+
+        if (extractedFromJD.length > 0) {
+          console.log(`Extracted ${extractedFromJD.length} missing skills from job description:`, extractedFromJD)
+          validatedResult.missingSkills = extractedFromJD
+        }
+      }
+    }
+
+    // Add validation logging
+    logSkillsGapValidation(validatedResult)
 
     return validatedResult
   } catch (error) {
