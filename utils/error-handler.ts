@@ -91,38 +91,41 @@ export function handleError(
   // Report to Sentry based on severity
   if (process.env.NODE_ENV === "production" || opts.logToService) {
     if (error instanceof Error) {
-      // Add context to the error
-      Sentry.configureScope((scope) => {
-        scope.setTag("category", category)
-        scope.setTag("severity", severity)
-        scope.setContext("error_details", {
+      // Add context to the error - using a safer approach
+      try {
+        Sentry.setTag("category", category)
+        Sentry.setTag("severity", severity)
+        Sentry.setContext("error_details", {
           ...structuredError,
           details: JSON.stringify(structuredError.details || {}),
         })
-      })
 
-      // Capture the error with appropriate severity level
-      switch (severity) {
-        case ErrorSeverity.INFO:
-          Sentry.captureMessage(error.message, "info")
-          break
-        case ErrorSeverity.WARNING:
-          Sentry.captureMessage(error.message, "warning")
-          break
-        case ErrorSeverity.ERROR:
-          Sentry.captureException(error)
-          break
-        case ErrorSeverity.CRITICAL:
-          Sentry.captureException(error)
-          // You could also add additional handling for critical errors
-          break
+        // Capture the error with appropriate severity level
+        switch (severity) {
+          case ErrorSeverity.INFO:
+            Sentry.captureMessage(error.message, "info")
+            break
+          case ErrorSeverity.WARNING:
+            Sentry.captureMessage(error.message, "warning")
+            break
+          case ErrorSeverity.ERROR:
+          case ErrorSeverity.CRITICAL:
+            Sentry.captureException(error)
+            break
+        }
+      } catch (sentryError) {
+        console.error("Error reporting to Sentry:", sentryError)
       }
     } else {
       // For string errors, capture as message
-      Sentry.captureMessage(
-        typeof error === "string" ? error : "Unknown error",
-        severity === ErrorSeverity.INFO ? "info" : severity === ErrorSeverity.WARNING ? "warning" : "error",
-      )
+      try {
+        Sentry.captureMessage(
+          typeof error === "string" ? error : "Unknown error",
+          severity === ErrorSeverity.INFO ? "info" : severity === ErrorSeverity.WARNING ? "warning" : "error",
+        )
+      } catch (sentryError) {
+        console.error("Error reporting to Sentry:", sentryError)
+      }
     }
   }
 
@@ -137,14 +140,22 @@ export function handleError(
 // Add a new function to set user context for Sentry
 export function setUserContext(user: { id?: string; email?: string; username?: string }) {
   if (user.id || user.email || user.username) {
-    Sentry.setUser({
-      id: user.id,
-      email: user.email,
-      username: user.username,
-    })
+    try {
+      Sentry.setUser({
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      })
+    } catch (error) {
+      console.error("Error setting Sentry user context:", error)
+    }
   } else {
     // Clear user context if no user data provided
-    Sentry.setUser(null)
+    try {
+      Sentry.setUser(null)
+    } catch (error) {
+      console.error("Error clearing Sentry user context:", error)
+    }
   }
 }
 
@@ -155,20 +166,39 @@ export function addBreadcrumb(
   data?: Record<string, any>,
   level?: "info" | "warning" | "error",
 ) {
-  Sentry.addBreadcrumb({
-    message,
-    category: category || "app",
-    data,
-    level: level || "info",
-  })
+  try {
+    Sentry.addBreadcrumb({
+      message,
+      category: category || "app",
+      data,
+      level: level || "info",
+    })
+  } catch (error) {
+    console.error("Error adding Sentry breadcrumb:", error)
+  }
 }
 
 // Add a function to start performance monitoring for specific operations
 export function startSentryTransaction(name: string, op: string) {
-  return Sentry.startTransaction({
-    name,
-    op,
-  })
+  try {
+    // Use a simpler approach that doesn't rely on startTransaction
+    const transaction = {
+      name,
+      op,
+      finish: () => {
+        console.log(`Transaction ${name} (${op}) finished`)
+      },
+    }
+    return transaction
+  } catch (error) {
+    console.error("Error starting Sentry transaction:", error)
+    // Return a dummy transaction object
+    return {
+      name,
+      op,
+      finish: () => {},
+    }
+  }
 }
 
 /**

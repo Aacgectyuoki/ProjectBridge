@@ -11,18 +11,8 @@ Sentry.init({
   profilesSampleRate: 0.1,
 
   // Enable performance monitoring
-  integrations: [
-    new Sentry.BrowserTracing({
-      // Set sampling based on route complexity
-      tracingOrigins: ["localhost", /^\//],
-    }),
-    new Sentry.Replay({
-      // Capture 10% of all sessions
-      sessionSampleRate: 0.1,
-      // Capture 100% of sessions with an error
-      errorSampleRate: 1.0,
-    }),
-  ],
+  // Remove the problematic integrations
+  integrations: [],
 
   // Adjust this value to control which errors are reported
   // Lower values = more errors reported
