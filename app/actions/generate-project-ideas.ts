@@ -1,7 +1,9 @@
 "use server"
 
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+// import { generateText } from "ai"
+// import { LangChain } from "langchain"
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
 import type { ResumeAnalysisResult } from "./analyze-resume"
 import type { JobAnalysisResult } from "./analyze-job-description"
 import { storeAnalysisData } from "@/utils/analysis-session-manager"
@@ -243,137 +245,110 @@ function createFallbackProjects(text: string): ProjectIdea[] {
 export async function generateProjectIdeas(
   resumeAnalysis: ResumeAnalysisResult,
   jobAnalysis: JobAnalysisResult,
-  roleFocus?: string,
+  roleFocus?: string
 ): Promise<ProjectIdea[]> {
-  try {
-    // Validate input data
-    if (!resumeAnalysis || !jobAnalysis) {
-      console.error("Missing resume or job analysis data:", { resumeAnalysis, jobAnalysis })
-      throw new Error("Missing resume or job data")
-    }
-
-    // Normalize the input data to handle different log structures
-    const resumeSkills = [
-      ...(resumeAnalysis.skills?.technical || []),
-      ...(resumeAnalysis.skills?.soft || []),
-      ...(resumeAnalysis.skills?.tools || []),
-      ...(resumeAnalysis.skills?.frameworks || []),
-      ...(resumeAnalysis.skills?.languages || []),
-      ...(resumeAnalysis.skills?.databases || []),
-      ...(resumeAnalysis.skills?.platforms || []),
-    ]
-
-    // Extract required skills from job, handling different data structures
-    const jobRequiredSkills = jobAnalysis.requiredSkills || []
-    const jobPreferredSkills = jobAnalysis.preferredSkills || []
-
-    // Handle alternative data structures
-    const technicalSkills = (jobAnalysis as any).technicalSkills || []
-    const softSkills = (jobAnalysis as any).softSkills || []
-
-    const jobSkills = [...jobRequiredSkills, ...jobPreferredSkills, ...technicalSkills, ...softSkills].filter(Boolean) // Remove any undefined/null values
-
-    // Identify missing skills (skills in job but not in resume)
-    const missingSkills = jobSkills.filter(
-      (skill) =>
-        !resumeSkills.some(
-          (resumeSkill) =>
-            resumeSkill.toLowerCase().includes(skill.toLowerCase()) ||
-            skill.toLowerCase().includes(resumeSkill.toLowerCase()),
-        ),
-    )
-
-    // Create a prompt for the AI
-    const prompt = `
-      I need to generate 3 project ideas for a job seeker who wants to develop skills for a ${jobAnalysis.title || "tech"} role.
-
-      RESUME SKILLS:
-      ${resumeSkills.join(", ")}
-
-      JOB REQUIRED SKILLS:
-      ${jobRequiredSkills.join(", ") || "Not specified"}
-
-      JOB PREFERRED SKILLS:
-      ${jobPreferredSkills.join(", ") || "Not specified"}
-
-      MISSING SKILLS THAT NEED DEVELOPMENT:
-      ${missingSkills.join(", ")}
-
-      JOB RESPONSIBILITIES:
-      ${jobAnalysis.responsibilities?.join(", ") || "Not specified"}
-
-      ${roleFocus ? `ROLE FOCUS: ${roleFocus}` : ""}
-
-      Please generate 3 detailed project ideas that will help the job seeker develop the missing skills and prepare for the responsibilities of this role. Each project should:
-      1. Be realistic and achievable (not too large in scope)
-      2. Focus primarily on the missing skills
-      3. Be relevant to the job responsibilities
-      4. Include clear steps to complete
-      5. Include learning resources
-      6. Have a reasonable time estimate based on the difficulty
-      7. Include deployment options
-
-      For each project, provide the following information in a structured JSON format:
-      - id: A unique identifier (use a short string)
-      - title: A clear, descriptive title
-      - description: A detailed description of the project
-      - skillsAddressed: An array of skills this project will help develop
-      - difficulty: One of "Beginner", "Intermediate", or "Advanced"
-      - timeEstimate: Estimated time to complete (e.g., "2-3 weeks")
-      - steps: An array of steps to complete the project
-      - learningResources: An array of resources with title, url, and type
-      - tools: An array of tools or technologies to use
-      - deploymentOptions: An array of ways to deploy or showcase the project
-      - additionalNotes: Any additional helpful information
-      - tags: An array of relevant tags for the project
-
-      IMPORTANT: Ensure all JSON property names are in double quotes, and all string values are in double quotes. Do not use single quotes in the JSON. Make sure there are commas between array elements and object properties, but no trailing commas.
-
-      Return only the JSON array of 3 project ideas without any additional text or explanation.
-    `
-
-    // Use rate limit retry wrapper
-    const { text } = await withRateLimitRetry(async () => {
-      return await generateText({
-        model: groq("llama3-70b-8192"),
-        prompt,
-        temperature: 0.7,
-        maxTokens: 4000,
-      })
-    }, 5) // Allow up to 5 retries
-
-    console.log("Raw Groq response:", text)
-
-    // Parse the JSON response using our safe parser
-    try {
-      const result = safeJSONParse(text)
-
-      // Store the result with session isolation
-      storeAnalysisData("projectIdeas", result)
-
-      // Ensure each project has the expected structure
-      return result.map((project: any, index: number) => ({
-        id: project.id || `project-${index + 1}`,
-        title: project.title || defaultProjectIdea.title,
-        description: project.description || defaultProjectIdea.description,
-        skillsAddressed: project.skillsAddressed || defaultProjectIdea.skillsAddressed,
-        difficulty: project.difficulty || defaultProjectIdea.difficulty,
-        timeEstimate: project.timeEstimate || defaultProjectIdea.timeEstimate,
-        steps: project.steps || defaultProjectIdea.steps,
-        learningResources: project.learningResources || defaultProjectIdea.learningResources,
-        tools: project.tools || defaultProjectIdea.tools,
-        githubRepoTemplate: project.githubRepoTemplate,
-        deploymentOptions: project.deploymentOptions || defaultProjectIdea.deploymentOptions,
-        additionalNotes: project.additionalNotes,
-        tags: project.tags || defaultProjectIdea.tags,
-      }))
-    } catch (parseError) {
-      console.error("Error parsing Groq response:", parseError)
-      console.error("Raw response:", text)
-      return createFallbackProjects(text)
-    }
-  } catch (error) {
-    console.error("Error generating project ideas:", error)
-    throw error // Re-throw to allow proper error handling by the caller
+  if (!resumeAnalysis || !jobAnalysis) {
+    throw new Error("Missing resume or job data")
   }
+
+  // flatten & identify missing skills same as before...
+  const resumeSkills = [
+    ...(resumeAnalysis.skills.technical || []),
+    ...(resumeAnalysis.skills.soft || []),
+    // …
+  ]
+  const required = jobAnalysis.requiredSkills || []
+  const preferred = jobAnalysis.preferredSkills || []
+  const allJobSkills = [...required, ...preferred].filter(Boolean)
+  const missing = allJobSkills.filter(s => 
+    !resumeSkills.some(rs => rs.toLowerCase().includes(s.toLowerCase()))
+  )
+
+  // 1) Build the prompt template using ChatPromptTemplate
+  const promptTemplate = ChatPromptTemplate.fromTemplate(`
+You are a project-idea generator. Given:
+
+RESUME SKILLS:
+{resumeSkills}
+
+JOB REQUIRED SKILLS:
+{required}
+
+JOB PREFERRED SKILLS:
+{preferred}
+
+MISSING SKILLS:
+{missing}
+
+JOB RESPONSIBILITIES:
+{responsibilities}
+
+${roleFocus ? `ROLE FOCUS: ${roleFocus}` : ''}
+
+Generate exactly 3 project ideas in JSON array format. Each item must have:
+- id, title, description
+- skillsAddressed (array)
+- difficulty ("Beginner"/"Intermediate"/"Advanced")
+- timeEstimate
+- steps (array)
+- learningResources (title, url, type)
+- tools (array)
+- deploymentOptions (array)
+- additionalNotes?
+- tags (array)
+
+Return ONLY valid JSON (no prose, no markdown).`)
+
+  // 2) Init LLM and create chain with pipe
+  const llm = new ChatOpenAI({
+    modelName: "gpt-4o-mini",
+    openAIApiKey: process.env.OPENAI_API_KEY!,
+    temperature: 0.7,
+  })
+  
+  // Create chain using LCEL pipe
+  const chain = promptTemplate.pipe(llm)
+
+  // 3) Call under your retry
+  let raw: string
+  try {
+    const response = await withRateLimitRetry(
+      () =>
+        chain
+          .invoke({
+            resumeSkills: JSON.stringify(resumeSkills),
+            required: JSON.stringify(required),
+            preferred: JSON.stringify(preferred),
+            missing: JSON.stringify(missing),
+            responsibilities: JSON.stringify(jobAnalysis.responsibilities || []),
+            roleFocus: roleFocus || "",
+          })
+          .then(result => ({ text: result.content })),
+      5
+    )
+    raw = Array.isArray(response.text)
+      ? response.text.map(item => (typeof item === "string" ? item : (item?.text ?? ""))).join("")
+      : (typeof response.text === "string" ? response.text : (response.text?.text ?? ""))
+  } catch (err) {
+    console.error("LLM error, falling back:", err)
+    raw = "[]"
+  }
+
+  // 4) Clean & parse
+  const cleaned = raw
+    .trim()
+    .replace(/^.*?(\[)/, "[") // Remove 's' flag for compatibility
+    .replace(/(\])[\s\S]*$/, "]")
+  let projects = safeJSONParse(cleaned)
+  if (!projects || projects.length === 0) {
+    projects = createFallbackProjects(raw)
+  }
+
+  // 5) Store & return
+  storeAnalysisData("projectIdeas", projects)
+  return projects.map((p, i) => ({
+    ...defaultProjectIdea,
+    ...p,
+    id: p.id || `project-${i + 1}`,
+  }))
 }

@@ -1,7 +1,9 @@
-"\"use server"
+"use server"
 
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+// import { generateText } from "ai"
+// import { LangChain } from "langchain"
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { safeParseJSON } from "@/utils/enhanced-json-repair"
 import { withRetry } from "@/utils/api-rate-limit-handler"
 
@@ -76,103 +78,54 @@ const defaultResumeAnalysisResult: ResumeAnalysisResult = {
  * Analyzes a resume and extracts key information
  */
 export async function analyzeResume(resumeText: string): Promise<ResumeAnalysisResult> {
+  // 1) build your prompt template using ChatPromptTemplate
+  const resumePrompt = ChatPromptTemplate.fromTemplate(`
+You are a JSON-only resume parser. Given this resume text, extract:
+
+1) skills (technical & soft)
+2) contactInfo (name,email,phone,location,LinkedIn,GitHub,website)
+3) education history
+4) experience
+5) summary
+6) strengths
+7) weaknesses
+8) projects
+
+Return ONLY the JSON object matching this shape:
+
+{
+  "skills":{"technical": [],"soft":[]},
+  "contactInfo":{},
+  "education":[],
+  "experience":[],
+  "summary":"…",
+  "strengths":[],
+  "weaknesses":[],
+  "projects":[]
+}
+
+{resume}
+`)
+
+  // 2) instantiate your OpenAI client
+  const llm = new ChatOpenAI({
+    modelName: "gpt-4o-mini",
+    openAIApiKey: process.env.OPENAI_API_KEY,
+    temperature: 0.2,
+  })
+
+  // 3) wire up a chain using LCEL pipe
+  const chain = resumePrompt.pipe(llm)
+
   try {
-    const prompt = `
-      Analyze the following resume and extract key information in a structured format.
-      
-      Resume:
-      ${resumeText}
-      
-      Please extract and return the following information in JSON format:
-      1. Skills (technical and soft skills)
-      2. Contact information (name, email, phone, location, LinkedIn, GitHub, website)
-      3. Education history (degree, institution, year)
-      4. Work experience (title, company, duration, description, key achievements)
-      5. A brief professional summary
-      6. Strengths
-      7. Areas for improvement (weaknesses)
-      8. Projects (name, description, technologies used, date)
-      
-      Ensure your response is ONLY the JSON object, with no additional text before or after.
-      Make sure all property names are in quotes and all string values are in quotes.
-      Do not use trailing commas after the last item in arrays or objects.
-      
-      Format your response as valid JSON with the following structure exactly:
-      {
-        "skills": {
-          "technical": ["skill1", "skill2"],
-          "soft": ["skill1", "skill2"]
-        },
-        "contactInfo": {
-          "name": "Name",
-          "email": "email@example.com",
-          "phone": "Phone Number",
-          "location": "Location",
-          "linkedin": "LinkedIn URL",
-          "github": "GitHub URL",
-          "website": "Website URL"
-        },
-        "education": [
-          {
-            "degree": "Degree",
-            "institution": "Institution",
-            "year": "Year"
-          }
-        ],
-        "experience": [
-          {
-            "title": "Job Title",
-            "company": "Company Name",
-            "duration": "Duration",
-            "description": "Job Description",
-            "keyAchievements": ["achievement1", "achievement2"],
-            "startDate": "Start Date",
-            "endDate": "End Date"
-          }
-        ],
-        "summary": "Professional Summary",
-        "strengths": ["strength1", "strength2"],
-        "weaknesses": ["weakness1", "weakness2"],
-        "projects": [
-          {
-            "name": "Project Name",
-            "description": "Project Description",
-            "technologies": ["tech1", "tech2"],
-            "date": "Date"
-          }
-        ]
-      }
-    `
+    // 4) run it with invoke
+    const response = await chain.invoke({ resume: resumeText })
+    const raw = response.content
 
-    const GROQ_API_KEY = process.env.GROQ_API_KEY
-
-    if (!GROQ_API_KEY) {
-      console.error("GROQ_API_KEY is not defined in environment variables")
-      throw new Error("Groq API key is missing. Please check your environment variables.")
-    }
-
-    const { text } = await withRetry(
-      async () => {
-        return await generateText({
-          model: groq("llama3-70b-8192", { apiKey: GROQ_API_KEY }),
-          prompt,
-          temperature: 0.2,
-          maxTokens: 2048,
-        })
-      },
-      {
-        maxRetries: 3,
-        initialDelayMs: 2000,
-        maxDelayMs: 10000,
-        backoffFactor: 1.5,
-      },
-    )
-
-    const result = safeParseJSON(text, defaultResumeAnalysisResult)
-
-    return result
-  } catch (error) {
-    console.error("Error analyzing resume:", error)
+    // 5) now parse/repair
+    return safeParseJSON(String(raw), defaultResumeAnalysisResult)
+  } catch (e) {
+    console.error("analyzeResume failed:", e)
     return defaultResumeAnalysisResult
   }
 }

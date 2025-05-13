@@ -1,378 +1,290 @@
 "use server"
-import type { ResumeAnalysisResult } from "./analyze-resume"
-import type { JobAnalysisResult } from "./analyze-job-description"
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
-import { handleError, ErrorCategory, ErrorSeverity, withRetryAndErrorHandling } from "@/utils/error-handler"
-import { SkillsGapAnalysisError, SkillsGapAnalysisErrorType } from "@/types/skills-gap-analysis-error"
-import { safeParseJSON } from "@/utils/enhanced-json-repair"
 
-// Import the new utility at the top of the file
-import { extractMissingSkillsFromSummary, extractTechnologiesFromSummary } from "@/utils/summary-skill-extractor"
+// import { generateText } from "ai"
+// import { LangChain } from "langchain"
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
+import { categorizeAISkill, getSkillConfidence } from "@/utils/ai-skills-taxonomy"
+import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
 
-// Import the validator at the top of the file
-import { logSkillsGapValidation } from "@/utils/skills-gap-validator"
-
-// Import the job description skill extractor at the top of the file
-import { extractMissingSkillsFromJobDescription } from "@/utils/job-description-skill-extractor"
-
-export type SkillGapAnalysisResult = {
-  matchPercentage: number
-  missingSkills: {
-    name: string
-    level: string
-    priority: string
-    context: string
-  }[]
-  missingQualifications: {
-    description: string
-    importance: string
-    alternative?: string
-  }[]
-  missingExperience: {
-    area: string
-    yearsNeeded: string
-    suggestion: string
-  }[]
-  matchedSkills: {
-    name: string
-    proficiency: string
-    relevance: string
-  }[]
-  recommendations: {
-    type: string
-    description: string
-    timeToAcquire: string
-    priority: string
-  }[]
-  summary: string
+export type EnhancedExtractedSkills = {
+  technical: Array<{ name: string; confidence: number }>
+  soft: Array<{ name: string; confidence: number }>
+  tools: Array<{ name: string; confidence: number }>
+  frameworks: Array<{ name: string; confidence: number }>
+  languages: Array<{ name: string; confidence: number }>
+  databases: Array<{ name: string; confidence: number }>
+  methodologies: Array<{ name: string; confidence: number }>
+  platforms: Array<{ name: string; confidence: number }>
+  ai_concepts: Array<{ name: string; confidence: number }>
+  ai_infrastructure: Array<{ name: string; confidence: number }>
+  ai_agents: Array<{ name: string; confidence: number }>
+  ai_engineering: Array<{ name: string; confidence: number }>
+  ai_data: Array<{ name: string; confidence: number }>
+  ai_applications: Array<{ name: string; confidence: number }>
+  other: Array<{ name: string; confidence: number }>
 }
 
-// Default empty structure to ensure consistent shape
-const defaultSkillGapAnalysisResult: SkillGapAnalysisResult = {
-  matchPercentage: 0,
-  missingSkills: [],
-  missingQualifications: [],
-  missingExperience: [],
-  matchedSkills: [],
-  recommendations: [],
-  summary: "Analysis could not be completed. Please try again.",
+const defaultEnhancedExtractedSkills: EnhancedExtractedSkills = {
+  technical: [],
+  soft: [],
+  tools: [],
+  frameworks: [],
+  languages: [],
+  databases: [],
+  methodologies: [],
+  platforms: [],
+  ai_concepts: [],
+  ai_infrastructure: [],
+  ai_agents: [],
+  ai_engineering: [],
+  ai_data: [],
+  ai_applications: [],
+  other: [],
 }
 
-export async function analyzeSkillsGapFromResults(
-  resumeAnalysis: ResumeAnalysisResult,
-  jobAnalysis: JobAnalysisResult,
-): Promise<SkillGapAnalysisResult> {
+/**
+ * Enhanced skill extraction with AI-specific taxonomy and confidence scoring
+ */
+export async function enhancedExtractSkills(
+  text: string,
+  source: "resume" | "job" = "resume",
+): Promise<EnhancedExtractedSkills> {
+  const startTime = performance.now()
+
+  // 1) Build a ChatPromptTemplate with proper LCEL format
+  const skillPrompt = ChatPromptTemplate.fromTemplate(`
+You are an expert skills analyzer for the AI and tech industry. Your task is to extract and categorize all skills mentioned in the following ${source === "resume" ? "resume" : "job description"}.
+
+Text:
+{text}
+
+Extract ALL skills mentioned, including:
+1. Technical skills (programming, engineering, data analysis, etc.)
+2. Soft skills (communication, leadership, etc.)
+3. Tools (specific software, platforms, etc.)
+4. Frameworks and libraries
+5. Programming languages
+6. Databases
+7. Methodologies (Agile, Scrum, etc.)
+8. Platforms (cloud services, operating systems, etc.)
+9. AI-specific skills (machine learning, NLP, computer vision, etc.)
+10. Other relevant skills
+
+Guidelines:
+- Be comprehensive—even one-offs.
+- Resolve abbreviations (AWS → Amazon Web Services).
+- Use the most specific category available.
+- Return ONLY a JSON object with shape:
+{
+  "technical": ["skill1", ...],
+  "soft": ["skill1", ...],
+  "tools": ["tool1", ...],
+  "frameworks": ["framework1", ...],
+  "languages": ["lang1", ...],
+  "databases": ["db1", ...],
+  "methodologies": ["meth1", ...],
+  "platforms": ["plat1", ...],
+  "other": ["other1", ...]
+}
+`)
+
+  // 2) Spin up an OpenAI LLM
+  const llm = new ChatOpenAI({
+    modelName: "gpt-4o-mini",           // or whichever you prefer
+    openAIApiKey: process.env.OPENAI_API_KEY!,
+    temperature: 0.1,
+  })
+
+  // 3) Wire up the chain using LCEL pipe
+  const chain = skillPrompt.pipe(llm)
+
+  // 4) Execute the chain using invoke
+  let raw: string
   try {
-    console.log(
-      "Using existing session ID:",
-      typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
-    )
-
-    // Check if we already have a cached analysis result
-    const cachedAnalysis =
-      typeof localStorage !== "undefined"
-        ? localStorage.getItem(`skillGapAnalysis_${localStorage.getItem("currentAnalysisSession")}`)
-        : null
-
-    if (cachedAnalysis) {
-      console.log(
-        "Found skillGapAnalysis data in session",
-        typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
-      )
-      try {
-        const parsedAnalysis = JSON.parse(cachedAnalysis)
-        return parsedAnalysis
-      } catch (e) {
-        handleError(e as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: false })
-        console.error("Failed to parse cached analysis:", e)
-        // Continue with generating a new analysis
-      }
-    } else {
-      console.log(
-        "No skillGapAnalysis data found in session",
-        typeof localStorage !== "undefined" ? localStorage.getItem("currentAnalysisSession") : "server_session",
-      )
-    }
-
-    // Validate input data
-    if (!resumeAnalysis || !jobAnalysis) {
-      const error = new SkillsGapAnalysisError(
-        "Missing resume or job analysis data",
-        SkillsGapAnalysisErrorType.INSUFFICIENT_DATA,
-        { resumeAnalysis, jobAnalysis },
-      )
-
-      handleError(error, ErrorCategory.DATA_PARSING, ErrorSeverity.ERROR)
-
-      return defaultSkillGapAnalysisResult
-    }
-
-    // Prepare the data for the prompt
-    const resumeSkills = getAllSkills(resumeAnalysis)
-    const jobRequiredSkills = jobAnalysis.requiredSkills || []
-    const jobPreferredSkills = jobAnalysis.preferredSkills || []
-
-    console.log("Required Skills:", JSON.stringify(jobRequiredSkills))
-    console.log("Preferred Skills:", JSON.stringify(jobPreferredSkills))
-    console.log("Extracted Skills:", JSON.stringify(resumeSkills))
-    console.log("Responsibilities:", JSON.stringify(jobAnalysis.responsibilities || []))
-
-    // Check if we have enough data to perform analysis
-    const hasResumeSkills = Object.values(resumeSkills).some((arr) => arr.length > 0)
-    const hasJobSkills = jobRequiredSkills.length > 0 || jobPreferredSkills.length > 0
-
-    // If we don't have enough data, return the default result
-    if (!hasResumeSkills || !hasJobSkills) {
-      const error = new SkillsGapAnalysisError(
-        "Insufficient data for skills gap analysis",
-        SkillsGapAnalysisErrorType.INSUFFICIENT_DATA,
-        { hasResumeSkills, hasJobSkills },
-      )
-
-      handleError(error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: true })
-
-      console.log("Insufficient data for skills gap analysis, returning default result")
-      return defaultSkillGapAnalysisResult
-    }
-
-    // If AI is not available or we want to skip it for testing, generate a data-driven analysis
-    // This ensures we always have meaningful data to display
-    const fallbackAnalysis = generateDataDrivenAnalysis(
-      resumeSkills,
-      jobRequiredSkills,
-      jobPreferredSkills,
-      jobAnalysis,
-    )
-
-    try {
-      // Prepare the prompt for skill gap analysis
-      const prompt = `
-  You are a skilled career advisor with expertise in analyzing skills gaps between a candidate's resume and job requirements.
-  
-  Resume Skills:
-  ${JSON.stringify(resumeSkills, null, 2)}
-  
-  Job Required Skills:
-  ${JSON.stringify(jobRequiredSkills, null, 2)}
-  
-  Job Preferred Skills:
-  ${JSON.stringify(jobPreferredSkills, null, 2)}
-  
-  Job Title: ${jobAnalysis.title || "Unknown Position"}
-  
-  Job Responsibilities:
-  ${JSON.stringify(jobAnalysis.responsibilities || [], null, 2)}
-  
-  Job Qualifications:
-  ${JSON.stringify(jobAnalysis.qualifications || {}, null, 2)}
-  
-  Job Experience Requirements:
-  ${JSON.stringify(jobAnalysis.experience || {}, null, 2)}
-  
-  Resume Experience:
-  ${JSON.stringify(resumeAnalysis.experience || [], null, 2)}
-  
-  Resume Education:
-  ${JSON.stringify(resumeAnalysis.education || [], null, 2)}
-  
-  Based on the above information, analyze the skills gap between the candidate's resume and the job requirements.
-  Be specific and detailed in your analysis. Focus on the actual skills in the resume and job description.
-  
-  IMPORTANT: You MUST identify specific matched skills from the resume that align with the job requirements.
-  IMPORTANT: You MUST identify specific missing skills that are required or preferred for the job but not found in the resume.
-  
-  Return a JSON object with the following structure:
-  {
-    "matchPercentage": 75,
-    "missingSkills": [
-      {
-        "name": "Skill Name",
-        "level": "Beginner/Intermediate/Advanced",
-        "priority": "High/Medium/Low",
-        "context": "Why this skill is important for the role"
-      }
-    ],
-    "missingQualifications": [
-      {
-        "description": "Qualification description",
-        "importance": "Required/Preferred",
-        "alternative": "Alternative qualification or experience"
-      }
-    ],
-    "missingExperience": [
-      {
-        "area": "Experience area",
-        "yearsNeeded": "Years needed",
-        "suggestion": "How to gain this experience"
-      }
-    ],
-    "matchedSkills": [
-      {
-        "name": "Skill Name",
-        "proficiency": "Beginner/Intermediate/Advanced",
-        "relevance": "High/Medium/Low"
-      }
-    ],
-    "recommendations": [
-      {
-        "type": "Project/Course/Certification",
-        "description": "Detailed description",
-        "timeToAcquire": "Estimated time",
-        "priority": "High/Medium/Low"
-      }
-    ],
-    "summary": "A brief summary of the skills gap analysis that specifically mentions the job title and key skills"
+    const response = await chain.invoke({ text, source })
+    raw = typeof response.content === "string"
+      ? response.content
+      : Array.isArray(response.content)
+        ? response.content.map((c: any) => (typeof c === "string" ? c : c.text ?? "")).join(" ")
+        : String(response.content)
+  } catch (e) {
+    console.error("LangChain error:", e)
+    raw = ""  // fallback to empty so we hit regex path below
   }
-  
-  CRITICAL INSTRUCTIONS:
-  1. EVERY skill mentioned in your summary MUST also appear in either matchedSkills or missingSkills arrays
-  2. If you mention a skill is missing in the summary, you MUST include it in the missingSkills array
-  3. If you mention a skill is matched in the summary, you MUST include it in the matchedSkills array
-  4. NEVER leave missingSkills empty if you mention missing skills in the summary
-  5. Include at least 1-3 actionable recommendations for learning missing skills
-  6. Do not include non-learnable items like "years of experience" or "degrees" in recommendations
-  
-  IMPORTANT: Your response must be ONLY the JSON object, with no additional text before or after.
-  Make sure all property names and string values are properly quoted.
-  Do not use trailing commas.
-  Ensure all arrays and objects are properly closed.
-  Always use colons after property names.
-  Do not include any explanations or notes outside the JSON structure.
-  Format the JSON properly with correct indentation and line breaks.
-`
 
-      // Generate the analysis with retry and error handling
-      const { text: responseText } = await withRetryAndErrorHandling(
-        async () => {
-          return await generateText({
-            model: groq("llama3-70b-8192"),
-            prompt,
-            temperature: 0.2,
-            maxTokens: 2048,
-          })
-        },
-        {
-          category: ErrorCategory.API,
-          maxRetries: 3,
-          onRetry: (attempt, error) => {
-            console.warn(`AI request attempt ${attempt} failed: ${error.message}. Retrying...`)
-          },
-        },
-      )
-
-      console.log("Raw AI response (first 200 chars):", responseText.substring(0, 200) + "...")
-
-      // First, try to clean up the response to ensure it's valid JSON
-      let cleanedResponse = responseText.trim()
-
-      // Remove any non-JSON content before the first opening brace
-      const firstBrace = cleanedResponse.indexOf("{")
-      if (firstBrace > 0) {
-        cleanedResponse = cleanedResponse.substring(firstBrace)
-      }
-
-      // Remove any non-JSON content after the last closing brace
-      const lastBrace = cleanedResponse.lastIndexOf("}")
-      if (lastBrace !== -1 && lastBrace < cleanedResponse.length - 1) {
-        cleanedResponse = cleanedResponse.substring(0, lastBrace + 1)
-      }
-
-      // Use our enhanced JSON repair utility to parse the response
-      try {
-        const parsedResult = safeParseJSON<SkillGapAnalysisResult>(cleanedResponse, defaultSkillGapAnalysisResult)
-        console.log("Successfully parsed JSON with enhanced repair")
-
-        // Ensure the result has the expected structure
-        const validatedResult = ensureValidStructure(parsedResult, jobAnalysis)
-
-        // Add validation logging
-        logSkillsGapValidation(validatedResult)
-
-        // Filter out non-learnable recommendations
-        validatedResult.recommendations = filterRecommendations(validatedResult.recommendations)
-
-        // Store the result in localStorage
-        if (typeof localStorage !== "undefined") {
-          const sessionId = localStorage.getItem("currentAnalysisSession") || "unknown_session"
-          localStorage.setItem(`skillGapAnalysis_${sessionId}`, JSON.stringify(validatedResult))
-          console.log("Stored skillGapAnalysis data in session", sessionId)
-        }
-
-        return validatedResult
-      } catch (parseError) {
-        handleError(parseError as Error, ErrorCategory.DATA_PARSING, ErrorSeverity.WARNING, { notifyUser: false })
-        console.error("Enhanced JSON parse failed:", (parseError as Error).message)
-
-        // If parsing fails, use our data-driven fallback
-        if (fallbackAnalysis) {
-          console.log("JSON parsing failed, using data-driven fallback analysis")
-
-          // Filter the fallback recommendations
-          fallbackAnalysis.recommendations = filterRecommendations(fallbackAnalysis.recommendations)
-
-          // Store the result in localStorage
-          if (typeof localStorage !== "undefined") {
-            const sessionId = localStorage.getItem("currentAnalysisSession") || "unknown_session"
-            localStorage.setItem(`skillGapAnalysis_${sessionId}`, JSON.stringify(fallbackAnalysis))
-            console.log("Stored fallback skillGapAnalysis data in session", sessionId)
-          }
-
-          return fallbackAnalysis
-        }
-      }
-
-      // If all parsing strategies fail, use our data-driven fallback
-      if (fallbackAnalysis) {
-        console.log("All JSON parsing strategies failed, using data-driven fallback analysis")
-
-        // Filter the fallback recommendations
-        fallbackAnalysis.recommendations = filterRecommendations(fallbackAnalysis.recommendations)
-
-        // Store the result in localStorage
-        if (typeof localStorage !== "undefined") {
-          const sessionId = localStorage.getItem("currentAnalysisSession") || "unknown_session"
-          localStorage.setItem(`skillGapAnalysis_${sessionId}`, JSON.stringify(fallbackAnalysis))
-          console.log("Stored fallback skillGapAnalysis data in session", sessionId)
-        }
-
-        return fallbackAnalysis
-      }
-
-      // If fallback is not available, return the default result
-      return defaultSkillGapAnalysisResult
-    } catch (error) {
-      const skillsGapError = new SkillsGapAnalysisError(
-        "Error generating or parsing AI response",
-        SkillsGapAnalysisErrorType.API_ERROR,
-        error,
-      )
-
-      handleError(skillsGapError, ErrorCategory.API, ErrorSeverity.ERROR)
-
-      // If AI fails, use our data-driven fallback
-      if (fallbackAnalysis) {
-        console.log("AI request failed, using data-driven fallback analysis")
-
-        // Filter the fallback recommendations
-        fallbackAnalysis.recommendations = filterRecommendations(fallbackAnalysis.recommendations)
-
-        return fallbackAnalysis
-      }
-
-      return defaultSkillGapAnalysisResult
+  // 5) Parse JSON or fallback
+  let extracted: Record<string, any> | null = null
+  try {
+    extracted = JSON.parse(raw)
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (m) {
+      try { extracted = JSON.parse(m[0]) } catch {}
     }
-  } catch (error) {
-    const skillsGapError = new SkillsGapAnalysisError(
-      "Error analyzing skills gap",
-      SkillsGapAnalysisErrorType.UNKNOWN_ERROR,
-      error,
-    )
-
-    handleError(skillsGapError, ErrorCategory.UNKNOWN, ErrorSeverity.ERROR)
-
-    return defaultSkillGapAnalysisResult
   }
+  if (!extracted) {
+    console.log("Falling back to regex extraction")
+    extracted = extractSkillsWithRegex(text)
+  }
+
+  // 6) Build enhanced result
+  const enhanced = { ...defaultEnhancedExtractedSkills }
+  Object.entries(extracted).forEach(([cat, list]) => {
+    if (Array.isArray(list)) {
+      list.forEach((skill: string) => {
+        if (!skill || typeof skill !== "string") return
+        const confidence = getSkillConfidence(skill, text)
+        enhanced[cat as keyof EnhancedExtractedSkills].push({ name: skill, confidence })
+        categorizeAISkill(skill).forEach((aiCat) => {
+          const key = `ai_${aiCat}` as keyof EnhancedExtractedSkills
+          if (enhanced[key]) enhanced[key].push({ name: skill, confidence })
+        })
+      })
+    }
+  })
+
+  // 7) Log and return
+  EnhancedSkillsLogger.logExtractedSkills(
+    text,
+    enhanced,
+    `enhanced-${source}-extraction`,
+    Math.round(performance.now() - startTime),
+  )
+  return enhanced
+}
+
+/**
+ * Fallback function to extract skills using regex patterns
+ */
+function extractSkillsWithRegex(text: string): any {
+  const normalizedText = text.toLowerCase()
+
+  const extractedSkills: {
+    technical: string[]
+    soft: string[]
+    tools: string[]
+    frameworks: string[]
+    languages: string[]
+    databases: string[]
+    methodologies: string[]
+    platforms: string[]
+    other: string[]
+  } = {
+    technical: [],
+    soft: [],
+    tools: [],
+    frameworks: [],
+    languages: [],
+    databases: [],
+    methodologies: [],
+    platforms: [],
+    other: [],
+  }
+
+  // Common programming languages
+  const languages = [
+    "javascript",
+    "typescript",
+    "python",
+    "java",
+    "c\\+\\+",
+    "c#",
+    "ruby",
+    "go",
+    "rust",
+    "php",
+    "swift",
+    "kotlin",
+  ]
+  languages.forEach((lang) => {
+    const regex = new RegExp(`\\b${lang}\\b`, "i")
+    if (regex.test(normalizedText)) {
+      extractedSkills.languages.push(lang.charAt(0).toUpperCase() + lang.slice(1).replace("\\+\\+", "++"))
+    }
+  })
+
+  // Common frameworks
+  const frameworks = [
+    "react",
+    "angular",
+    "vue",
+    "next.js",
+    "express",
+    "django",
+    "flask",
+    "spring",
+    "tensorflow",
+    "pytorch",
+    "langchain",
+  ]
+  frameworks.forEach((framework) => {
+    const regex = new RegExp(`\\b${framework}\\b`, "i")
+    if (regex.test(normalizedText)) {
+      extractedSkills.frameworks.push(framework.charAt(0).toUpperCase() + framework.slice(1))
+    }
+  })
+
+  // Common databases
+  const databases = [
+    "sql",
+    "mysql",
+    "postgresql",
+    "mongodb",
+    "dynamodb",
+    "redis",
+    "cassandra",
+    "sqlite",
+    "oracle",
+    "vector database",
+  ]
+  databases.forEach((db) => {
+    const regex = new RegExp(`\\b${db}\\b`, "i")
+    if (regex.test(normalizedText)) {
+      extractedSkills.databases.push(db.charAt(0).toUpperCase() + db.slice(1))
+    }
+  })
+
+  // Common AI terms
+  const aiTerms = [
+    "machine learning",
+    "deep learning",
+    "nlp",
+    "computer vision",
+    "ai",
+    "ml",
+    "neural network",
+    "llm",
+    "large language model",
+    "rag",
+    "retrieval augmented generation",
+  ]
+  aiTerms.forEach((term) => {
+    const regex = new RegExp(`\\b${term}\\b`, "i")
+    if (regex.test(normalizedText)) {
+      extractedSkills.technical.push(term.charAt(0).toUpperCase() + term.slice(1))
+    }
+  })
+
+  // Common soft skills
+  const softSkills = [
+    "leadership",
+    "communication",
+    "teamwork",
+    "problem solving",
+    "critical thinking",
+    "time management",
+    "collaboration",
+    "adaptability",
+  ]
+  softSkills.forEach((skill) => {
+    const regex = new RegExp(`\\b${skill}\\b`, "i")
+    if (regex.test(normalizedText)) {
+      extractedSkills.soft.push(skill.charAt(0).toUpperCase() + skill.slice(1))
+    }
+  })
+
+  return extractedSkills
 }
 
 /**

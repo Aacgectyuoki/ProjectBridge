@@ -1,5 +1,7 @@
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+"use server"
+
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { performance } from "perf_hooks"
 import { withRetry } from "../api-rate-limit-handler"
 
@@ -18,7 +20,7 @@ export interface ModelFallbackOptions {
  * Default fallback options
  */
 const DEFAULT_FALLBACK_OPTIONS: ModelFallbackOptions = {
-  models: ["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768"],
+  models: ["gpt-4", "gpt-3.5-turbo", "gpt-3.5"],
   maxRetries: 3,
   initialDelayMs: 2000,
   maxDelayMs: 15000,
@@ -27,53 +29,47 @@ const DEFAULT_FALLBACK_OPTIONS: ModelFallbackOptions = {
 
 /**
  * Executes a function with multiple model fallbacks
- * @param fn Function that takes a model name and returns a promise
- * @param options Fallback options
- * @returns Result of the function
  */
 export async function withModelFallback<T>(
   fn: (model: string) => Promise<T>,
   options: Partial<ModelFallbackOptions> = {},
 ): Promise<T> {
-  const mergedOptions = { ...DEFAULT_FALLBACK_OPTIONS, ...options }
-  const { models, maxRetries, initialDelayMs, maxDelayMs, backoffFactor } = mergedOptions
+  const { models, maxRetries, initialDelayMs, maxDelayMs, backoffFactor } = {
+    ...DEFAULT_FALLBACK_OPTIONS,
+    ...options,
+  }
 
   let lastError: Error | null = null
-
   console.log(`ModelFallback: Starting with models [${models.join(", ")}]`)
 
   for (const model of models) {
     try {
       console.log(`ModelFallback: Trying model "${model}"`)
-      const startTime = performance.now()
-
+      const start = performance.now()
       const result = await withRetry(() => fn(model), {
         maxRetries,
         initialDelayMs,
         maxDelayMs,
         backoffFactor,
       })
-
-      const duration = performance.now() - startTime
-      console.log(`ModelFallback: Successfully used model "${model}" in ${duration.toFixed(2)}ms`)
-
+      console.log(
+        `ModelFallback: "${model}" succeeded in ${Math.round(
+          performance.now() - start
+        )}ms`
+      )
       return result
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      console.warn(`ModelFallback: Error with model "${model}":`, errorMessage)
-      lastError = error instanceof Error ? error : new Error(String(error))
+    } catch (err: any) {
+      console.warn(`ModelFallback: "${model}" failed:`, err.message || err)
+      lastError = err
     }
   }
 
-  console.error(`ModelFallback: All models failed. Last error:`, lastError)
-  throw new Error(`All models failed. Last error: ${lastError?.message}`)
+  console.error("ModelFallback: All models failed", lastError)
+  throw lastError || new Error("ModelFallback: All models failed")
 }
 
 /**
- * Generates text with model fallback
- * @param prompt Prompt to send to the model
- * @param options Fallback options
- * @returns Generated text
+ * Generates text with model fallback, using LangChain under the hood
  */
 export async function generateTextWithFallback(
   prompt: string,
@@ -81,20 +77,37 @@ export async function generateTextWithFallback(
     temperature?: number
     maxTokens?: number
     system?: string
-  } = {},
+  } = {}
 ): Promise<string> {
-  const { temperature = 0.2, maxTokens = 3000, system, ...fallbackOptions } = options
+  const { temperature = 0.2, maxTokens = 1500, system, ...fallbackOpts } = options
 
-  const { text } = await withModelFallback(
-    (model) =>
-      generateText({
-        model: groq(model),
-        prompt,
+  // Delegate to our fallback runner
+  const text = await withModelFallback<string>(
+    async (modelName) => {
+      // 1) spin up an OpenAI client with this model
+      const llm = new ChatOpenAI({
+        modelName,
+        openAIApiKey: process.env.OPENAI_API_KEY!,
         temperature,
         maxTokens,
-        ...(system ? { system } : {}),
-      }),
-    fallbackOptions,
+      })
+
+      // 2) Create a prompt template using LCEL
+      const promptTemplate = system 
+        ? ChatPromptTemplate.fromMessages([
+            ["system", system],
+            ["human", prompt]
+          ])
+        : ChatPromptTemplate.fromTemplate(prompt);
+
+      // 3) Create and invoke the chain using LCEL pipe
+      const chain = promptTemplate.pipe(llm);
+      const response = await chain.invoke({});
+      
+      // 4) Return the response as a string
+      return response.content;
+    },
+    fallbackOpts
   )
 
   return text

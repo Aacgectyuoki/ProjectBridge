@@ -1,23 +1,14 @@
 "use server"
 
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { safeParseJSON } from "@/utils/enhanced-json-repair"
 import { withRetry, isRateLimitError } from "@/utils/api-rate-limit-handler"
 import { preprocessForSkillExtraction } from "@/utils/text-preprocessor"
 
-// Use a smaller model for less token usage
-const MODEL_OPTIONS = {
-  primary: "llama3-70b-8192",
-  fallback: "llama3-8b-8192", // Fallback to a smaller model if rate limited
-}
-
-// Explicitly get the API key from environment variables
-const GROQ_API_KEY = process.env.GROQ_API_KEY
-
 export type ExtractedSkills = {
   technical: string[]
-  soft?: string[] // Make soft skills optional
+  soft?: string[]
   tools: string[]
   frameworks: string[]
   languages: string[]
@@ -29,7 +20,6 @@ export type ExtractedSkills = {
 
 const defaultExtractedSkills: ExtractedSkills = {
   technical: [],
-  // soft skills are now optional, so we don't need to include them in the default
   tools: [],
   frameworks: [],
   languages: [],
@@ -39,182 +29,115 @@ const defaultExtractedSkills: ExtractedSkills = {
   other: [],
 }
 
-/**
- * STEP 2: Extract skills from plain text
- * This function assumes the text has already been extracted from a document
- * @param text The plain text to extract skills from (resume or job description)
- * @param source Whether the text is from a resume or job description
- * @returns Structured object with categorized skills
- */
-export async function extractSkills(text: string, source: "resume" | "job" = "resume"): Promise<ExtractedSkills> {
+const MODEL_OPTIONS = {
+  primary: "gpt-4o-mini",
+  fallback: "gpt-4o-mini", // you can swap to a smaller model if desired
+}
+
+export async function extractSkills(
+  text: string,
+  source: "resume" | "job" = "resume"
+): Promise<ExtractedSkills> {
+  // 1) Preprocess
+  const preprocessed = preprocessForSkillExtraction(text)
+
+  // 2) Build prompt template using ChatPromptTemplate
+  const promptTemplate = ChatPromptTemplate.fromTemplate(
+    source === "resume" ? getResumeSkillsPrompt() : getJobSkillsPrompt()
+  )
+
+  // 3) Init LLM
+  const llm = new ChatOpenAI({
+    modelName: MODEL_OPTIONS.primary,
+    openAIApiKey: process.env.OPENAI_API_KEY!,
+    temperature: 0.1,
+  })
+
+  // 4) Create chain using LCEL
+  const chain = promptTemplate.pipe(llm)
+
+  // 5) Call under retry
+  let raw: string
   try {
-    console.log(`STEP 2: Extracting skills from ${source} text...`)
-
-    // Preprocess the text for optimal skill extraction
-    const preprocessedText = preprocessForSkillExtraction(text)
-    console.log(`Preprocessed text length: ${preprocessedText.length} characters`)
-
-    // Check if API key is available
-    if (!GROQ_API_KEY) {
-      console.error("GROQ_API_KEY is not defined in environment variables")
-      throw new Error("Groq API key is missing. Please check your environment variables.")
-    }
-
-    // Determine the appropriate prompt based on the source
-    const prompt = source === "resume" ? getResumeSkillsPrompt(preprocessedText) : getJobSkillsPrompt(preprocessedText)
-
-    // Use withRetry to handle rate limits with exponential backoff
-    const { text: response } = await withRetry(
-      async () => {
-        try {
-          return await generateText({
-            model: groq(MODEL_OPTIONS.primary, { apiKey: GROQ_API_KEY }),
-            prompt,
-            temperature: 0.1,
-            maxTokens: 800, // Reduced token count
-            system:
-              "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'.",
-          })
-        } catch (error) {
-          // If we hit a rate limit, try the fallback model
-          if (isRateLimitError(error)) {
-            console.log("Rate limited on primary model, trying fallback model...")
-            return await generateText({
-              model: groq(MODEL_OPTIONS.fallback, { apiKey: GROQ_API_KEY }),
-              prompt,
-              temperature: 0.1,
-              maxTokens: 800,
-              system:
-                "You are a JSON-only response bot. You must ONLY return valid JSON with no explanatory text. Your response must start with '{' and end with '}'.",
-            })
+    const response = await withRetry(
+      () =>
+        chain.invoke({ body: preprocessed }).then((res) => {
+          let text: string
+          if (typeof res.content === "string") {
+            text = res.content
+          } else if (Array.isArray(res.content)) {
+            text = res.content.map((c) => (typeof c === "string" ? c : c.text ?? "")).join("")
+          } else if (typeof res.content === "object" && res.content !== null && "text" in res.content) {
+            text = (res.content as any).text ?? ""
+          } else {
+            text = ""
           }
-          throw error
-        }
-      },
+          return { text }
+        }),
       {
         maxRetries: 3,
         initialDelayMs: 2000,
         maxDelayMs: 10000,
-        backoffFactor: 1.5,
-      },
+      }
     )
-
-    // Log the raw response for debugging
-    console.log("Raw response from LLM:", response.substring(0, 100) + "...")
-
-    // Pre-process the response to ensure it starts with { and ends with }
-    let processedResponse = response.trim()
-    if (!processedResponse.startsWith("{")) {
-      const firstBrace = processedResponse.indexOf("{")
-      if (firstBrace >= 0) {
-        processedResponse = processedResponse.substring(firstBrace)
-      } else {
-        throw new Error("Response does not contain a JSON object")
-      }
-    }
-
-    if (!processedResponse.endsWith("}")) {
-      const lastBrace = processedResponse.lastIndexOf("}")
-      if (lastBrace >= 0) {
-        processedResponse = processedResponse.substring(0, lastBrace + 1)
-      } else {
-        throw new Error("Response does not contain a JSON object")
-      }
-    }
-
-    // Parse the response with our enhanced JSON repair utility
-    const result = safeParseJSON(processedResponse, defaultExtractedSkills)
-
-    if (!result) {
-      console.error("Failed to parse skills extraction response")
-      return defaultExtractedSkills
-    }
-
-    console.log(`Successfully extracted skills:`, result)
-    return result as ExtractedSkills
-  } catch (error) {
-    console.error(`Error extracting skills from ${source}:`, error)
-    // Return a default structure on error
-    return defaultExtractedSkills
+    raw = response.text
+  } catch (e) {
+    console.warn("Primary LLM failed, falling back to simpler JSON:", e)
+    raw = "{}"
   }
+
+  // 6) Clean to start/end brace
+  let cleaned = raw.trim()
+  const first = cleaned.indexOf("{")
+  const last = cleaned.lastIndexOf("}")
+  if (first > 0) cleaned = cleaned.slice(first)
+  if (last !== -1 && last < cleaned.length - 1) cleaned = cleaned.slice(0, last + 1)
+
+  // 7) Parse with repair
+  const result = safeParseJSON<ExtractedSkills>(cleaned, defaultExtractedSkills)
+  return result
 }
 
-function getResumeSkillsPrompt(resumeText: string) {
+function getResumeSkillsPrompt() {
   return `
-    You are an expert skills analyzer for the tech industry. Your task is to extract ALL skills mentioned in the following text, 
-    regardless of format or structure. The text is from a resume or CV, but may be in any format.
-    
-    Text:
-    ${resumeText}
-    
-    Extract ALL skills mentioned in the text, including:
-    1. Technical skills (programming, engineering, data analysis, etc.)
-    2. Soft skills (communication, leadership, etc.)
-    3. Tools (specific software, platforms, etc.)
-    4. Frameworks and libraries
-    5. Programming languages
-    6. Databases
-    7. Methodologies (Agile, Scrum, etc.)
-    8. Platforms (cloud services, operating systems, etc.)
-    
-    Be thorough and extract ALL skills, even if they're only mentioned once or in passing.
-    Do not make assumptions about skills not explicitly mentioned.
-    
-    CRITICAL INSTRUCTION: Return ONLY a valid JSON object with NO explanatory text before or after.
-    Do NOT include phrases like "Here is the JSON" or "The extracted skills are".
-    The response must start with "{" and end with "}" and be valid JSON that can be parsed directly.
+You are an expert skills analyzer. Extract ALL skills from the following resume text provided in the "body" variable.
 
-    JSON structure:
-    {
-      "technical": ["skill1", "skill2"],
-      "soft": ["skill1", "skill2"],
-      "tools": ["tool1", "tool2"],
-      "frameworks": ["framework1", "framework2"],
-      "languages": ["language1", "language2"],
-      "databases": ["database1", "database2"],
-      "methodologies": ["methodology1", "methodology2"],
-      "platforms": ["platform1", "platform2"],
-      "other": ["other1", "other2"]
-    }
-  `
+{body}
+
+Return ONLY a JSON object with these keys (arrays of strings):
+{
+  "technical": [], 
+  "soft": [], 
+  "tools": [], 
+  "frameworks": [], 
+  "languages": [], 
+  "databases": [], 
+  "methodologies": [], 
+  "platforms": [], 
+  "other": []
 }
 
-function getJobSkillsPrompt(jobText: string) {
-  return `
-    You are an expert skills analyzer for the tech industry. Your task is to extract ALL skills required or mentioned in the following job description, 
-      Your task is to extract ALL skills required or mentioned in the following job description, 
-    
-    Job Description:
-    ${jobText}
-    
-    Extract ALL skills mentioned in the text, including:
-    1. Technical skills (programming, engineering, data analysis, etc.)
-    2. Soft skills (communication, leadership, etc.)
-    3. Tools (specific software, platforms, etc.)
-    4. Frameworks and libraries
-    5. Programming languages
-    6. Databases
-    7. Methodologies (Agile, Scrum, etc.)
-    8. Platforms (cloud services, operating systems, etc.)
-    
-    Be thorough and extract ALL skills, even if they're only mentioned once or in passing.
-    Do not make assumptions about skills not explicitly mentioned.
-    
-    CRITICAL INSTRUCTION: Return ONLY a valid JSON object with NO explanatory text before or after.
-    Do NOT include phrases like "Here is the JSON" or "The extracted skills are".
-    The response must start with "{" and end with "}" and be valid JSON that can be parsed directly.
+Use double quotes, no prose, and ensure it's valid JSON.`
+}
 
-    JSON structure:
-    {
-      "technical": ["skill1", "skill2"],
-      "soft": ["skill1", "skill2"],
-      "tools": ["tool1", "tool2"],
-      "frameworks": ["framework1", "framework2"],
-      "languages": ["language1", "language2"],
-      "databases": ["database1", "database2"],
-      "methodologies": ["methodology1", "methodology2"],
-      "platforms": ["platform1", "platform2"],
-      "other": ["other1", "other2"]
-    }
-  `
+function getJobSkillsPrompt() {
+  return `
+You are an expert skills analyzer. Extract ALL skills required or mentioned in the following job description text provided in the "body" variable.
+
+{body}
+
+Return ONLY a JSON object with these keys (arrays of strings):
+{
+  "technical": [], 
+  "soft": [], 
+  "tools": [], 
+  "frameworks": [], 
+  "languages": [], 
+  "databases": [], 
+  "methodologies": [], 
+  "platforms": [], 
+  "other": []
+}
+
+Use double quotes, no prose, and ensure it's valid JSON.`
 }

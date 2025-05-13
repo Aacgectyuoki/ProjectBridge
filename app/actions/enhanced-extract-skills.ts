@@ -1,7 +1,9 @@
 "use server"
 
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+// import { generateText } from "ai"
+// import { LangChain } from "langchain"
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { categorizeAISkill, getSkillConfidence } from "@/utils/ai-skills-taxonomy"
 import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
 
@@ -50,138 +52,110 @@ export async function enhancedExtractSkills(
 ): Promise<EnhancedExtractedSkills> {
   const startTime = performance.now()
 
+  // 1) Build a ChatPromptTemplate with proper LCEL format
+  const skillPrompt = ChatPromptTemplate.fromTemplate(`
+You are an expert skills analyzer for the AI and tech industry. Your task is to extract and categorize all skills mentioned in the following ${source === "resume" ? "resume" : "job description"}.
+
+Text:
+{text}
+
+Extract ALL skills mentioned, including:
+1. Technical skills (programming, engineering, data analysis, etc.)
+2. Soft skills (communication, leadership, etc.)
+3. Tools (specific software, platforms, etc.)
+4. Frameworks and libraries
+5. Programming languages
+6. Databases
+7. Methodologies (Agile, Scrum, etc.)
+8. Platforms (cloud services, operating systems, etc.)
+9. AI-specific skills (machine learning, NLP, computer vision, etc.)
+10. Other relevant skills
+
+Guidelines:
+- Be comprehensive—even one-offs.
+- Resolve abbreviations (AWS → Amazon Web Services).
+- Use the most specific category available.
+- Return ONLY a JSON object with shape:
+{
+  "technical": ["skill1", ...],
+  "soft": ["skill1", ...],
+  "tools": ["tool1", ...],
+  "frameworks": ["framework1", ...],
+  "languages": ["lang1", ...],
+  "databases": ["db1", ...],
+  "methodologies": ["meth1", ...],
+  "platforms": ["plat1", ...],
+  "other": ["other1", ...]
+}
+`)
+
+  // 2) Spin up an OpenAI LLM
+  const llm = new ChatOpenAI({
+    modelName: "gpt-4o-mini",           // or whichever you prefer
+    openAIApiKey: process.env.OPENAI_API_KEY!,
+    temperature: 0.1,
+  })
+
+  // 3) Wire up the chain using LCEL pipe
+  const chain = skillPrompt.pipe(llm)
+
+  // 4) Execute the chain using invoke
+  let raw: string
   try {
-    // First, use the LLM to extract skills
-    const prompt = `
-      You are an expert skills analyzer for the AI and tech industry. Your task is to extract and categorize all skills mentioned in the following ${source === "resume" ? "resume" : "job description"}.
-
-      ${source === "resume" ? "RESUME" : "JOB DESCRIPTION"}:
-      ${text}
-
-      Extract ALL skills mentioned in the text, including:
-      1. Technical skills (programming, engineering, data analysis, etc.)
-      2. Soft skills (communication, leadership, etc.)
-      3. Tools (specific software, platforms, etc.)
-      4. Frameworks and libraries
-      5. Programming languages
-      6. Databases
-      7. Methodologies (Agile, Scrum, etc.)
-      8. Platforms (cloud services, operating systems, etc.)
-      9. AI-specific skills (machine learning, NLP, computer vision, etc.)
-      10. Other relevant skills
-
-      Important guidelines:
-      - Be comprehensive and extract ALL skills, even if they're only mentioned once
-      - Resolve abbreviations to their full forms (e.g., "AWS" → "Amazon Web Services")
-      - Include both technical and non-technical skills
-      - Categorize each skill appropriately
-      - If a skill could fit in multiple categories, place it in the most specific one
-      - Do not include generic terms that aren't specific skills
-      - For AI skills, be very specific and detailed
-
-      Format your response as valid JSON with the following structure exactly:
-      {
-        "technical": ["skill1", "skill2", ...],
-        "soft": ["skill1", "skill2", ...],
-        "tools": ["tool1", "tool2", ...],
-        "frameworks": ["framework1", "framework2", ...],
-        "languages": ["language1", "language2", ...],
-        "databases": ["database1", "database2", ...],
-        "methodologies": ["methodology1", "methodology2", ...],
-        "platforms": ["platform1", "platform2", ...],
-        "other": ["other1", "other2", ...]
-      }
-
-      IMPORTANT: Return ONLY the JSON object without ANY additional text, explanation, or markdown formatting.
-      The response MUST be a valid JSON object that can be parsed with JSON.parse().
-    `
-
-    const { text: responseText } = await generateText({
-      model: groq("llama3-70b-8192"),
-      prompt,
-      temperature: 0.1,
-      maxTokens: 2048,
-    })
-
-    // Parse the JSON response
-    let extractedSkills
-    try {
-      extractedSkills = JSON.parse(responseText)
-    } catch (error) {
-      console.error("Error parsing LLM response:", error)
-      // Try to extract JSON from the text
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        try {
-          extractedSkills = JSON.parse(jsonMatch[0])
-        } catch (innerError) {
-          console.error("Error parsing extracted JSON:", innerError)
-          extractedSkills = null
-        }
-      }
+    const response = await chain.invoke({ text, source })
+    if (typeof response.content === "string") {
+      raw = response.content
+    } else if (Array.isArray(response.content)) {
+      raw = response.content.map((c: any) => (typeof c === "string" ? c : c.text ?? "")).join(" ")
+    } else if (typeof response.content === "object" && response.content !== null && "text" in response.content) {
+      raw = (response.content as any).text ?? ""
+    } else {
+      raw = ""
     }
-
-    // If we couldn't parse the JSON, use a fallback
-    if (!extractedSkills) {
-      console.log("Using fallback skill extraction")
-      extractedSkills = extractSkillsWithRegex(text)
-    }
-
-    // Now enhance the extracted skills with our AI taxonomy
-    const enhancedSkills: EnhancedExtractedSkills = { ...defaultEnhancedExtractedSkills }
-
-    // Process each category from the LLM extraction
-    Object.entries(extractedSkills).forEach(([category, skills]) => {
-      if (Array.isArray(skills)) {
-        skills.forEach((skill) => {
-          if (typeof skill === "string" && skill.trim()) {
-            const confidence = getSkillConfidence(skill, text)
-
-            // Add to the original category
-            enhancedSkills[category].push({ name: skill, confidence })
-
-            // Also categorize using our AI taxonomy
-            const aiCategories = categorizeAISkill(skill)
-            aiCategories.forEach((aiCategory) => {
-              if (aiCategory !== "other" && enhancedSkills[`ai_${aiCategory}`]) {
-                enhancedSkills[`ai_${aiCategory}`].push({ name: skill, confidence })
-              }
-            })
-          }
-        })
-      }
-    })
-
-    // Log the extraction process
-    const processingTime = performance.now() - startTime
-    EnhancedSkillsLogger.logExtractedSkills(
-      text,
-      enhancedSkills,
-      `enhanced-${source}-extraction`,
-      Math.round(processingTime),
-    )
-
-    return enhancedSkills
-  } catch (error) {
-    console.error("Error in enhanced skill extraction:", error)
-
-    // Use fallback extraction
-    const fallbackSkills = extractSkillsWithRegex(text)
-    const enhancedSkills: EnhancedExtractedSkills = { ...defaultEnhancedExtractedSkills }
-
-    // Convert fallback skills to enhanced format
-    Object.entries(fallbackSkills).forEach(([category, skills]) => {
-      if (Array.isArray(skills)) {
-        skills.forEach((skill) => {
-          if (typeof skill === "string" && skill.trim()) {
-            enhancedSkills[category].push({ name: skill, confidence: 0.5 })
-          }
-        })
-      }
-    })
-
-    return enhancedSkills
+  } catch (e) {
+    console.error("LangChain error:", e)
+    raw = ""  // fallback to empty so we hit regex path below
   }
+
+  // 5) Parse JSON or fallback
+  let extracted: Record<string, any> | null = null
+  try {
+    extracted = JSON.parse(raw)
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (m) {
+      try { extracted = JSON.parse(m[0]) } catch {}
+    }
+  }
+  if (!extracted) {
+    console.log("Falling back to regex extraction")
+    extracted = extractSkillsWithRegex(text)
+  }
+
+  // 6) Build enhanced result
+  const enhanced = { ...defaultEnhancedExtractedSkills }
+  Object.entries(extracted).forEach(([cat, list]) => {
+    if (Array.isArray(list)) {
+      list.forEach((skill: string) => {
+        if (!skill || typeof skill !== "string") return
+        const confidence = getSkillConfidence(skill, text)
+        enhanced[cat as keyof EnhancedExtractedSkills].push({ name: skill, confidence })
+        categorizeAISkill(skill).forEach((aiCat) => {
+          const key = `ai_${aiCat}` as keyof EnhancedExtractedSkills
+          if (enhanced[key]) enhanced[key].push({ name: skill, confidence })
+        })
+      })
+    }
+  })
+
+  // 7) Log and return
+  EnhancedSkillsLogger.logExtractedSkills(
+    text,
+    enhanced,
+    `enhanced-${source}-extraction`,
+    Math.round(performance.now() - startTime),
+  )
+  return enhanced
 }
 
 /**

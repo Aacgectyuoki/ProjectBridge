@@ -1,350 +1,314 @@
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
-import { EnhancedSkillsLogger } from "./enhanced-skills-logger"
+// import { generateText } from "ai"
+// import { LangChain } from "langchain"
+import { ChatOpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
+import { withRetry } from "./api-rate-limit-handler"
 
-// Common patterns in job descriptions
-const PATTERN_INDICATORS = [
-  "e.g.,",
-  "such as",
-  "like",
-  "including",
-  "for example",
-  "or similar",
-  "or equivalent",
-  "or related",
-]
-
-// Relationship types
-const RELATIONSHIP_TYPES = [
-  "experience with",
-  "exposure to",
-  "familiarity with",
-  "knowledge of",
-  "proficiency in",
-  "skilled in",
-  "expertise in",
-  "background in",
-]
-
-export type SkillPattern = {
+export type SkillEmbedding = {
+  skill: string
+  embedding: number[]
   category: string
-  skills: string[]
-  relationshipType: string
-  required: boolean
-  originalText: string
-  confidence: number
 }
 
-/**
- * Extracts skill patterns from job description text using regex
- */
-export function extractPatternsWithRegex(text: string): SkillPattern[] {
-  const patterns: SkillPattern[] = []
-
-  // Pattern 1: Category (e.g., Skill1, Skill2)
-  const egPattern = /([A-Za-z\s/]+)\s*$$\s*(?:e\.g\.|i\.e\.|such as|like|including),\s*([^)]+)$$/gi
-  let match
-
-  while ((match = egPattern.exec(text)) !== null) {
-    const category = match[1].trim()
-    const skillsText = match[2].trim()
-    const skills = skillsText
-      .split(/,\s*|,?\s*(?:and|or)\s*/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-
-    // Determine relationship type
-    let relationshipType = "knowledge of" // default
-    for (const type of RELATIONSHIP_TYPES) {
-      const beforeText = text.substring(Math.max(0, match.index - 30), match.index)
-      if (beforeText.toLowerCase().includes(type)) {
-        relationshipType = type
-        break
-      }
-    }
-
-    // Determine if required
-    const contextBefore = text.substring(Math.max(0, match.index - 100), match.index)
-    const required = !/(optional|nice to have|preferred|plus|bonus|desired)/i.test(contextBefore)
-
-    patterns.push({
-      category,
-      skills,
-      relationshipType,
-      required,
-      originalText: match[0],
-      confidence: 0.8,
-    })
-  }
-
-  // Pattern 2: Category such as Skill1, Skill2, or Skill3
-  const suchAsPattern = /([A-Za-z\s/]+)\s*(?:such as|like|including)\s*([^.;:]+)(?:[.;:]|$)/gi
-
-  while ((match = suchAsPattern.exec(text)) !== null) {
-    const category = match[1].trim()
-    const skillsText = match[2].trim()
-    const skills = skillsText
-      .split(/,\s*|,?\s*(?:and|or)\s*/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-
-    // Determine relationship type
-    let relationshipType = "knowledge of" // default
-    for (const type of RELATIONSHIP_TYPES) {
-      const beforeText = text.substring(Math.max(0, match.index - 30), match.index)
-      if (beforeText.toLowerCase().includes(type)) {
-        relationshipType = type
-        break
-      }
-    }
-
-    // Determine if required
-    const contextBefore = text.substring(Math.max(0, match.index - 100), match.index)
-    const required = !/(optional|nice to have|preferred|plus|bonus|desired)/i.test(contextBefore)
-
-    patterns.push({
-      category,
-      skills,
-      relationshipType,
-      required,
-      originalText: match[0],
-      confidence: 0.7,
-    })
-  }
-
-  return patterns
+export type SkillSimilarity = {
+  skill1: string
+  skill2: string
+  similarity: number
+  relationship: "identical" | "similar" | "related" | "subset" | "superset" | "different"
 }
 
+// Cache for embeddings to avoid redundant API calls
+const embeddingCache = new Map<string, number[]>()
+
 /**
- * Extracts skill patterns using AI
+ * Predefined skill relationships to supplement embedding-based matching
  */
-export async function extractPatternsWithAI(text: string): Promise<SkillPattern[]> {
+const SKILL_RELATIONSHIPS = [
+  // AI Infrastructure relationships
+  { from: ["langchain", "aws lambda", "vector db"], to: "ai infrastructure deployment", confidence: 0.85 },
+  { from: ["langchain", "aws lambda"], to: "llm hosting", confidence: 0.8 },
+  { from: ["docker", "kubernetes", "aws", "ci/cd", "llm"], to: "ai infrastructure deployment", confidence: 0.9 },
+  { from: ["langchain", "agents", "tools"], to: "agentic workflow", confidence: 0.9 },
+  { from: ["langchain", "function calling", "tools"], to: "auto-agent", confidence: 0.85 },
+  { from: ["langchain", "multi-agent"], to: "multi-agent coordination", confidence: 0.9 },
+  { from: ["llm", "chain of thought", "prompt engineering"], to: "reasoning", confidence: 0.8 },
+  { from: ["llm", "few-shot learning"], to: "reasoning", confidence: 0.75 },
+  { from: ["pytorch", "tensorflow", "data generation"], to: "synthetic data training", confidence: 0.8 },
+  { from: ["deployed", "ai", "production"], to: "launched ai products to production", confidence: 0.9 },
+]
+
+// Initialize OpenAI model
+const llm = new ChatOpenAI({
+  temperature: 0.2, // Lower temperature for more deterministic embeddings
+  modelName: "gpt-4o-mini",
+  openAIApiKey: process.env.OPENAI_API_KEY
+});
+
+// Create a prompt template for embeddings
+const embeddingPrompt = ChatPromptTemplate.fromTemplate(`Generate a JSON array of 384 floating point numbers representing a normalized embedding for this technical skill:
+Skill: {skill}
+
+Return only the JSON array, nothing else.`);
+
+// Create the chain using LCEL
+const embedChain = embeddingPrompt.pipe(llm);
+
+/**
+ * Generates embeddings for a skill using LCEL
+ */
+export async function generateSkillEmbedding(skill: string): Promise<number[]> {
+  const key = skill.toLowerCase().trim()
+  if (embeddingCache.has(key)) return embeddingCache.get(key)!
+
   try {
-    const prompt = `
-      Analyze this job description text and identify all instances where a skill category is followed by specific examples.
-      
-      Text:
-      "${text}"
-      
-      For each pattern found, extract:
-      1. The skill category (e.g., "observability tools")
-      2. The specific skills/technologies mentioned (e.g., "Prometheus", "Grafana")
-      3. The relationship type (e.g., "exposure to", "experience with", "proficiency in")
-      4. Whether it's required or preferred/optional
-      
-      Return as JSON in this format:
-      [
-        {
-          "category": "observability tools",
-          "skills": ["Prometheus", "Grafana", "OpenTelemetry"],
-          "relationshipType": "exposure to",
-          "required": true,
-          "originalText": "full matching text"
-        }
-      ]
-      
-      IMPORTANT:
-      - Use double quotes for all strings and property names
-      - Do not include trailing commas
-      - Return ONLY the JSON array, no additional text
-    `
+    // Call the chain under retry
+    const start = performance.now()
+    const response = await withRetry(
+      () => embedChain.invoke({ skill }),
+      { maxRetries: 2 }
+    )
+    console.log(`Embedding generated in ${performance.now() - start}ms`)
 
-    const startTime = performance.now()
-    const { text: result } = await generateText({
-      model: groq("llama3-70b-8192"),
-      prompt,
-      temperature: 0.2,
-      maxTokens: 2048,
-    })
-    const endTime = performance.now()
-
-    EnhancedSkillsLogger.logProcessingStep({
-      step: "AI Pattern Extraction",
-      duration: endTime - startTime,
-      status: "success",
-      details: { prompt_length: prompt.length, response_length: result.length },
-    })
-
-    try {
-      // Try to parse the JSON response
-      const patterns = JSON.parse(result) as SkillPattern[]
-
-      // Add confidence score
-      return patterns.map((p) => ({
-        ...p,
-        confidence: 0.9,
-      }))
-    } catch (e) {
-      console.error("Failed to parse AI pattern extraction result:", e)
-      EnhancedSkillsLogger.logProcessingStep({
-        step: "AI Pattern Extraction - JSON Parsing",
-        duration: 0,
-        status: "error",
-        details: { error: e.message, result },
-      })
-      return []
-    }
-  } catch (e) {
-    console.error("Error in AI pattern extraction:", e)
-    EnhancedSkillsLogger.logProcessingStep({
-      step: "AI Pattern Extraction",
-      duration: 0,
-      status: "error",
-      details: { error: e.message },
-    })
-    return []
+    // extract and normalize
+    const responseText = response.content
+    const match = responseText.match(/\[[\s\S]*\]/)
+    if (!match) throw new Error("No array in response")
+    const raw = JSON.parse(match[0]) as number[]
+    const mag = Math.sqrt(raw.reduce((sum, v) => sum + v * v, 0))
+    const normalized = raw.map(v => v / mag)
+    embeddingCache.set(key, normalized)
+    return normalized
+  } catch (err) {
+    console.error("Embedding failed, falling back:", err)
+    // fallback to random
+    const fallback = Array.from({ length: 384 }, () => Math.random() * 2 - 1)
+    const mag = Math.sqrt(fallback.reduce((s, v) => s + v * v, 0))
+    const norm = fallback.map(v => v / mag)
+    embeddingCache.set(key, norm)
+    return norm
   }
 }
 
 /**
- * Combines regex and AI approaches for pattern extraction
+ * Calculates cosine similarity between two embedding vectors
  */
-export async function extractSkillPatterns(text: string): Promise<SkillPattern[]> {
-  // Start with regex patterns (fast)
-  const regexPatterns = extractPatternsWithRegex(text)
+export function calculateCosineSimilarity(vec1: number[], vec2: number[]): number {
+  if (vec1.length !== vec2.length) {
+    throw new Error("Vectors must have the same dimensions")
+  }
 
-  // Then try AI-based extraction (more comprehensive but slower)
-  let aiPatterns: SkillPattern[] = []
+  let dotProduct = 0
+  let mag1 = 0
+  let mag2 = 0
+
+  for (let i = 0; i < vec1.length; i++) {
+    dotProduct += vec1[i] * vec2[i]
+    mag1 += vec1[i] * vec1[i]
+    mag2 += vec2[i] * vec2[i]
+  }
+
+  mag1 = Math.sqrt(mag1)
+  mag2 = Math.sqrt(mag2)
+
+  return dotProduct / (mag1 * mag2)
+}
+
+/**
+ * Determines the relationship between two skills based on their similarity score
+ */
+function determineRelationship(
+  similarity: number,
+): "identical" | "similar" | "related" | "subset" | "superset" | "different" {
+  if (similarity > 0.95) return "identical"
+  if (similarity > 0.85) return "similar"
+  if (similarity > 0.75) return "related"
+  if (similarity > 0.65) return "subset" // This is simplified; ideally we'd have directional info
+  if (similarity > 0.55) return "superset"
+  return "different"
+}
+
+/**
+ * Compares two skills semantically using embeddings
+ */
+export async function compareSkills(skill1: string, skill2: string): Promise<SkillSimilarity> {
   try {
-    aiPatterns = await extractPatternsWithAI(text)
-  } catch (e) {
-    console.error("AI pattern extraction failed, falling back to regex only:", e)
-  }
+    const embedding1 = await generateSkillEmbedding(skill1)
+    const embedding2 = await generateSkillEmbedding(skill2)
 
-  // Combine and deduplicate results
-  const allPatterns = [...regexPatterns, ...aiPatterns]
-
-  // Deduplicate based on skills
-  const uniquePatterns: SkillPattern[] = []
-  const seenSkills = new Set<string>()
-
-  for (const pattern of allPatterns) {
-    const newSkills = pattern.skills.filter((skill) => !seenSkills.has(skill.toLowerCase()))
-
-    if (newSkills.length > 0) {
-      // Add new skills to seen set
-      newSkills.forEach((skill) => seenSkills.add(skill.toLowerCase()))
-
-      // Add pattern with only new skills
-      uniquePatterns.push({
-        ...pattern,
-        skills: newSkills,
-      })
-    }
-  }
-
-  return uniquePatterns
-}
-
-/**
- * Normalizes extracted skills based on common variations
- */
-export function normalizeSkills(patterns: SkillPattern[]): SkillPattern[] {
-  // Common variations of the same skill
-  const skillVariations: Record<string, string[]> = {
-    react: ["reactjs", "react.js", "react js"],
-    angular: ["angularjs", "angular.js", "angular js"],
-    vue: ["vuejs", "vue.js", "vue js"],
-    javascript: ["js", "ecmascript"],
-    typescript: ["ts"],
-    python: ["py"],
-    kubernetes: ["k8s"],
-    docker: ["docker container"],
-    // Add more variations as needed
-  }
-
-  // Create a mapping from variation to canonical form
-  const normalizationMap: Record<string, string> = {}
-  Object.entries(skillVariations).forEach(([canonical, variations]) => {
-    variations.forEach((variation) => {
-      normalizationMap[variation.toLowerCase()] = canonical
-    })
-  })
-
-  // Normalize skills in each pattern
-  return patterns.map((pattern) => {
-    const normalizedSkills = pattern.skills.map((skill) => {
-      const skillLower = skill.toLowerCase()
-      return normalizationMap[skillLower] || skill
-    })
+    const similarity = calculateCosineSimilarity(embedding1, embedding2)
+    const relationship = determineRelationship(similarity)
 
     return {
-      ...pattern,
-      skills: normalizedSkills,
+      skill1,
+      skill2,
+      similarity,
+      relationship,
     }
-  })
+  } catch (error) {
+    console.error("Error comparing skills:", error)
+    return {
+      skill1,
+      skill2,
+      similarity: 0,
+      relationship: "different",
+    }
+  }
 }
 
 /**
- * Categorizes skills into technical domains
+ * Checks for predefined skill relationships
  */
-export function categorizeSkills(patterns: SkillPattern[]): Record<string, string[]> {
-  const categories: Record<string, string[]> = {
-    frontend: [],
-    backend: [],
-    database: [],
-    devops: [],
-    cloud: [],
-    mobile: [],
-    ai_ml: [],
-    testing: [],
-    other: [],
-  }
+function checkPredefinedRelationships(
+  resumeSkills: string[],
+  jobSkill: string,
+): {
+  matched: boolean
+  confidence: number
+  matchedSkills: string[]
+} {
+  // Normalize the job skill for comparison
+  const normalizedJobSkill = jobSkill.toLowerCase().trim()
 
-  // Skill to category mapping
-  const skillCategories: Record<string, string> = {
-    // Frontend
-    react: "frontend",
-    angular: "frontend",
-    vue: "frontend",
-    javascript: "frontend",
-    typescript: "frontend",
-    html: "frontend",
-    css: "frontend",
+  // Normalize all resume skills
+  const normalizedResumeSkills = resumeSkills.map((skill) => skill.toLowerCase().trim())
 
-    // Backend
-    python: "backend",
-    java: "backend",
-    go: "backend",
-    "node.js": "backend",
-    "c#": "backend",
-    ruby: "backend",
-    php: "backend",
+  // Check each predefined relationship
+  for (const relationship of SKILL_RELATIONSHIPS) {
+    if (normalizedJobSkill.includes(relationship.to.toLowerCase())) {
+      // Check if resume skills contain all required skills for this relationship
+      const matchedSkills = relationship.from.filter((requiredSkill) =>
+        normalizedResumeSkills.some(
+          (resumeSkill) =>
+            resumeSkill.includes(requiredSkill.toLowerCase()) || requiredSkill.toLowerCase().includes(resumeSkill),
+        ),
+      )
 
-    // Database
-    sql: "database",
-    postgresql: "database",
-    mysql: "database",
-    mongodb: "database",
-    redis: "database",
+      // Calculate match ratio
+      const matchRatio = matchedSkills.length / relationship.from.length
 
-    // DevOps
-    docker: "devops",
-    kubernetes: "devops",
-    jenkins: "devops",
-    "github actions": "devops",
-    "gitlab ci": "devops",
-    terraform: "devops",
-
-    // Cloud
-    aws: "cloud",
-    azure: "cloud",
-    gcp: "cloud",
-    "google cloud": "cloud",
-
-    // Add more mappings as needed
-  }
-
-  // Categorize all skills
-  patterns.forEach((pattern) => {
-    pattern.skills.forEach((skill) => {
-      const skillLower = skill.toLowerCase()
-      const category = skillCategories[skillLower] || "other"
-      if (!categories[category].includes(skill)) {
-        categories[category].push(skill)
+      // If we have a good match (at least 70% of required skills)
+      if (matchRatio >= 0.7) {
+        return {
+          matched: true,
+          confidence: relationship.confidence * matchRatio,
+          matchedSkills: matchedSkills,
+        }
       }
+    }
+  }
+
+  return { matched: false, confidence: 0, matchedSkills: [] }
+}
+
+/**
+ * Finds semantically similar skills between two lists
+ */
+export async function findSemanticMatches(
+  resumeSkills: string[],
+  jobSkills: string[],
+  similarityThreshold = 0.75,
+): Promise<{
+  exactMatches: string[]
+  semanticMatches: Array<{
+    resumeSkill: string
+    jobSkill: string
+    similarity: number
+    relationship: string
+    isIndirect?: boolean
+  }>
+  missingSkills: string[]
+}> {
+  const exactMatches: string[] = []
+  const semanticMatches: Array<{
+    resumeSkill: string
+    jobSkill: string
+    similarity: number
+    relationship: string
+    isIndirect?: boolean
+  }> = []
+
+  // Normalize all skills
+  const normalizedResumeSkills = resumeSkills.map((s) => s.toLowerCase().trim())
+  const normalizedJobSkills = jobSkills.map((s) => s.toLowerCase().trim())
+
+  // Find exact matches first (with case-insensitive comparison)
+  const remainingJobSkills = normalizedJobSkills.filter((jobSkill) => {
+    const isExactMatch = normalizedResumeSkills.some((resumeSkill) => {
+      // Check for exact match or common aliases
+      return (
+        resumeSkill === jobSkill ||
+        (resumeSkill === "tensorflow" && jobSkill === "tf") ||
+        (resumeSkill === "tf" && jobSkill === "tensorflow") ||
+        (resumeSkill === "pytorch" && jobSkill === "torch") ||
+        (resumeSkill === "torch" && jobSkill === "pytorch")
+      )
     })
+
+    if (isExactMatch) {
+      exactMatches.push(jobSkill)
+    }
+
+    return !isExactMatch
   })
 
-  return categories
+  // For remaining job skills, check predefined relationships first
+  const stillRemainingJobSkills = remainingJobSkills.filter((jobSkill) => {
+    const relationshipMatch = checkPredefinedRelationships(resumeSkills, jobSkill)
+
+    if (relationshipMatch.matched) {
+      semanticMatches.push({
+        resumeSkill: relationshipMatch.matchedSkills.join(" + "),
+        jobSkill,
+        similarity: relationshipMatch.confidence,
+        relationship: "inferred",
+        isIndirect: true,
+      })
+      return false
+    }
+    return true
+  })
+
+  // For still remaining job skills, find semantic matches
+  for (const jobSkill of stillRemainingJobSkills) {
+    let bestMatch = {
+      resumeSkill: "",
+      similarity: 0,
+      relationship: "different",
+    }
+
+    for (const resumeSkill of normalizedResumeSkills) {
+      // Skip if already an exact match
+      if (exactMatches.includes(resumeSkill)) continue
+
+      const { similarity, relationship } = await compareSkills(resumeSkill, jobSkill)
+
+      if (similarity > bestMatch.similarity) {
+        bestMatch = {
+          resumeSkill,
+          similarity,
+          relationship,
+        }
+      }
+    }
+
+    if (bestMatch.similarity >= similarityThreshold) {
+      semanticMatches.push({
+        resumeSkill: bestMatch.resumeSkill,
+        jobSkill,
+        similarity: bestMatch.similarity,
+        relationship: bestMatch.relationship,
+      })
+    }
+  }
+
+  // Determine missing skills
+  const missingSkills = stillRemainingJobSkills.filter(
+    (jobSkill) => !semanticMatches.some((match) => match.jobSkill === jobSkill),
+  )
+
+  return {
+    exactMatches,
+    semanticMatches,
+    missingSkills,
+  }
 }

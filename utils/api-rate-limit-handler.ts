@@ -10,7 +10,7 @@
 export function isRateLimitError(error: any): boolean {
   if (!error) return false
 
-  const errorMessage = error.message || error.toString()
+  const errorMessage = error.message || error.content
   return (
     errorMessage.includes("Rate limit") ||
     errorMessage.includes("rate limit") ||

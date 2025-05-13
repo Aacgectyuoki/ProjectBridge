@@ -1,5 +1,10 @@
-import { generateText } from "ai"
-import { groq } from "@ai-sdk/groq"
+// import { generateText } from "ai"
+// import { LangChain } from "langchain"
+// import { OpenAI } from "@langchain/openai"
+// import { LLMChain } from "@langchain/chains"
+// import { PromptTemplate } from "langchain/prompts"
+import { OpenAI } from "@langchain/openai"
+import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { withRetry } from "./api-rate-limit-handler"
 
 export type SkillEmbedding = {
@@ -41,58 +46,56 @@ const SKILL_RELATIONSHIPS = [
   { from: ["deployed", "ai", "production"], to: "launched ai products to production", confidence: 0.9 },
 ]
 
+
+// Initialize OpenAI model
+const llm = new OpenAI({
+  temperature: 0.2, // Lower temperature for more deterministic embeddings
+  modelName: "gpt-4o-mini",
+  openAIApiKey: process.env.OPENAI_API_KEY
+});
+
+// Create a prompt template for embeddings
+const embeddingPrompt = ChatPromptTemplate.fromTemplate(`Generate a JSON array of 384 floating point numbers representing a normalized embedding for this technical skill:
+Skill: {skill}
+
+Return only the JSON array, nothing else.`);
+
+// Create the chain using LCEL
+const embedChain = embeddingPrompt.pipe(llm);
+
 /**
- * Generates embeddings for a skill using Groq API
+ * Generates embeddings for a skill using LCEL
  */
 export async function generateSkillEmbedding(skill: string): Promise<number[]> {
-  // Check cache first
-  const normalizedSkill = skill.toLowerCase().trim()
-  if (embeddingCache.has(normalizedSkill)) {
-    return embeddingCache.get(normalizedSkill)!
-  }
+  const key = skill.toLowerCase().trim()
+  if (embeddingCache.has(key)) return embeddingCache.get(key)!
 
   try {
-    const { text } = await withRetry(
-      () =>
-        generateText({
-          model: groq("llama3-8b-8192"),
-          prompt: `
-            Generate a JSON array representing a 384-dimensional embedding vector for the following technical skill.
-            The embedding should capture the semantic meaning of the skill in the context of technical job requirements.
-            
-            Skill: ${skill}
-            
-            Return ONLY the JSON array of 384 floating point numbers, nothing else.
-          `,
-          temperature: 0.1,
-          maxTokens: 1000,
-        }),
-      { maxRetries: 2 },
+    // Call the chain under retry
+    const start = performance.now()
+    const response = await withRetry(
+      () => embedChain.invoke({ skill }),
+      { maxRetries: 2 }
     )
+    console.log(`Embedding generated in ${performance.now() - start}ms`)
 
-    // Extract the array from the response
-    const match = text.match(/\[[\s\S]*\]/)
-    if (!match) {
-      throw new Error("Could not extract embedding array from response")
-    }
-
-    const embedding = JSON.parse(match[0]) as number[]
-
-    // Normalize the embedding vector
-    const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0))
-    const normalizedEmbedding = embedding.map((val) => val / magnitude)
-
-    // Cache the result
-    embeddingCache.set(normalizedSkill, normalizedEmbedding)
-
-    return normalizedEmbedding
-  } catch (error) {
-    console.error("Error generating skill embedding:", error)
-
-    // Return a fallback random embedding if API fails
-    const fallbackEmbedding = Array.from({ length: 384 }, () => Math.random() * 2 - 1)
-    const magnitude = Math.sqrt(fallbackEmbedding.reduce((sum, val) => sum + val * val, 0))
-    return fallbackEmbedding.map((val) => val / magnitude)
+    // extract and normalize
+    const responseText = response.content
+    const match = responseText.match(/\[[\s\S]*\]/)
+    if (!match) throw new Error("No array in response")
+    const raw = JSON.parse(match[0]) as number[]
+    const mag = Math.sqrt(raw.reduce((sum, v) => sum + v * v, 0))
+    const normalized = raw.map(v => v / mag)
+    embeddingCache.set(key, normalized)
+    return normalized
+  } catch (err) {
+    console.error("Embedding failed, falling back:", err)
+    // fallback to random
+    const fallback = Array.from({ length: 384 }, () => Math.random() * 2 - 1)
+    const mag = Math.sqrt(fallback.reduce((s, v) => s + v * v, 0))
+    const norm = fallback.map(v => v / mag)
+    embeddingCache.set(key, norm)
+    return norm
   }
 }
 
