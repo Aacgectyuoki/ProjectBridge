@@ -1,11 +1,19 @@
 "use server"
 
-// import { generateText } from "ai"
-// import { LangChain } from "langchain"
+// Add this import or type definition for SkillGapAnalysisResult
+
+import type { JobAnalysisResult } from "@/app/actions/analyze-job-description"
 import { ChatOpenAI } from "@langchain/openai"
 import { ChatPromptTemplate } from "@langchain/core/prompts"
 import { categorizeAISkill, getSkillConfidence } from "@/utils/ai-skills-taxonomy"
 import { EnhancedSkillsLogger } from "@/utils/enhanced-skills-logger"
+import { extractMissingSkillsFromJobDescription } from "@/utils/job-description-skill-extractor"
+import { logSkillsGapValidation } from "@/utils/skills-gap-validator"
+import { ErrorCategory, ErrorSeverity, handleError } from "@/utils/error-handler"
+import { ResumeAnalysisResult } from "./analyze-resume"
+import { extractMissingSkillsFromSummary, extractTechnologiesFromSummary } from "@/utils/summary-skill-extractor"
+// import { extractSkillsWithRegex } from "@/utils/regex-skill-extractor"
+
 
 export type EnhancedExtractedSkills = {
   technical: Array<{ name: string; confidence: number }>
@@ -23,6 +31,38 @@ export type EnhancedExtractedSkills = {
   ai_data: Array<{ name: string; confidence: number }>
   ai_applications: Array<{ name: string; confidence: number }>
   other: Array<{ name: string; confidence: number }>
+}
+
+export type SkillGapAnalysisResult = {
+  matchPercentage: number
+  missingSkills: Array<{
+    name: string
+    level: string
+    priority: string
+    context: string
+  }>
+  missingQualifications: Array<{
+    description: string
+    importance: string
+    alternative?: string
+  }>
+  missingExperience: Array<{
+    area: string
+    yearsNeeded: string
+    suggestion: string
+  }>
+  matchedSkills: Array<{
+    name: string
+    proficiency: string
+    relevance: string
+  }>
+  recommendations: Array<{
+    type: string
+    description: string
+    timeToAcquire: string
+    priority: string
+  }>
+  summary: string
 }
 
 const defaultEnhancedExtractedSkills: EnhancedExtractedSkills = {
@@ -498,6 +538,19 @@ function generateDataDrivenAnalysis(
 }
 
 /**
+ * Default value for SkillGapAnalysisResult
+ */
+const defaultSkillGapAnalysisResult: SkillGapAnalysisResult = {
+  matchPercentage: 0,
+  missingSkills: [],
+  missingQualifications: [],
+  missingExperience: [],
+  matchedSkills: [],
+  recommendations: [],
+  summary: "",
+}
+
+/**
  * Ensure the result has the expected structure
  */
 function ensureValidStructure(result: any, jobAnalysis?: JobAnalysisResult): SkillGapAnalysisResult {
@@ -657,4 +710,32 @@ function getAllSkills(resumeAnalysis: ResumeAnalysisResult): Record<string, stri
   }
 
   return skills
+}
+
+export async function analyzeSkillsGapFromResults(
+  resumeAnalysis: ResumeAnalysisResult,
+  jobAnalysis: JobAnalysisResult
+): Promise<SkillGapAnalysisResult> {
+  // 1) First do your enhanced extraction (if you want to include AI-powered extraction here)
+enhancedExtractSkills(
+  resumeAnalysis.skills.technical.concat(resumeAnalysis.skills.soft || []).join(", "),
+  "resume"
+);
+
+  // 2) Build a flat map of resume skills into a Record<string,string[]>:
+  const resumeSkillsMap = getAllSkills(resumeAnalysis);
+
+  // 3) Compute the core gap analysis
+  const rawResult = generateDataDrivenAnalysis(
+    resumeSkillsMap,
+    jobAnalysis.requiredSkills,
+    jobAnalysis.preferredSkills,
+    jobAnalysis
+  );
+
+  // 4) Enforce and repair the shape
+  const final = ensureValidStructure(rawResult, jobAnalysis);
+
+  // 5) Return it
+  return final;
 }
