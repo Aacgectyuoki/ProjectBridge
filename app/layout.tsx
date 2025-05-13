@@ -11,7 +11,7 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "ProjectBridge",
   description: "Bridge the gap between your skills and job requirements",
-    generator: 'v0.dev'
+    // generator: 'v0.dev'
 }
 
 // Initialize Sentry user context - but safely
