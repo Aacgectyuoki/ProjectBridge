@@ -4,23 +4,17 @@
 const { withSentryConfig } = require("@sentry/nextjs")
 
 const nextConfig = {
-  output: 'export',
-  basePath: process.env.NODE_ENV === 'production' ? '/ProjectBridge' : '',
+  reactStrictMode: true,
+  swcMinify: true,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   images: {
     unoptimized: true,
   },
-  // output: 'export',
-  // reactStrictMode: true,
-  // swcMinify: true,
-  // eslint: {
-  //   ignoreDuringBuilds: true,
-  // },
-  // typescript: {
-  //   ignoreBuildErrors: true,
-  // },
-  // images: {
-  //   unoptimized: true,
-  // },
   // Your existing Next.js config
 }
 
