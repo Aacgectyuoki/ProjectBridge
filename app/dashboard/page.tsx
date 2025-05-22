@@ -8,22 +8,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ArrowRight } from "lucide-react"
 import { ResumeUpload } from "@/components/resume-upload"
 import { JobDescriptionInput } from "@/components/job-description-input"
-import { RoleFocusSelect } from "@/components/role-focus-select"
 import { ResumeAnalysisResults } from "@/components/resume-analysis-results"
 import { JobAnalysisResults } from "@/components/job-analysis-results"
 import { SkillsSummary } from "@/components/skills-summary"
 import type { ResumeAnalysisResult } from "@/app/actions/analyze-resume"
 import type { JobAnalysisResult } from "@/app/actions/analyze-job-description"
-import { SkillsLogViewer } from "@/components/skills-log-viewer"
-// Add the new DetailedSkillExtractionLog component to the imports
-import { DetailedSkillExtractionLog } from "@/components/detailed-skill-extraction-log"
 import { forceNewSession } from "@/utils/analysis-session-manager"
-// Import the debug function
-import { debugLogAllStoredData } from "@/utils/analysis-session-manager"
 import { toast } from "@/components/ui/use-toast"
 import { validateResume } from "@/utils/resume-validator"
 import { ResumeValidatorResults } from "@/components/resume-validator-results"
-// Add these imports at the top of the file
 import {
   synchronizeSessionData,
   recoverMissingData,
@@ -37,33 +30,27 @@ export default function Dashboard() {
   const [resumeAnalysis, setResumeAnalysis] = useState<ResumeAnalysisResult | null>(null)
   const [jobData, setJobData] = useState(null)
   const [jobAnalysis, setJobAnalysis] = useState<JobAnalysisResult | null>(null)
-  const [roleFocus, setRoleFocus] = useState("")
   const [fileSelected, setFileSelected] = useState(false)
   const [fileUploaded, setFileUploaded] = useState(false)
   const [showSkillsSummary, setShowSkillsSummary] = useState(false)
-  const [showJobSkillsLog, setShowJobSkillsLog] = useState(false)
   const [resumeText, setResumeText] = useState("")
   const [validationResults, setValidationResults] = useState<any>(null)
 
-  // Update the useEffect hook to include data recovery
   useEffect(() => {
     try {
       console.log("Dashboard mounted, initializing session")
 
-      // Create a new session when the dashboard is loaded directly
       if (window.location.pathname === "/dashboard" && !window.location.search.includes("keepSession")) {
         console.log("Creating new session")
         forceNewSession()
       }
 
-      // Try to recover any missing data and synchronize across sessions
       synchronizeSessionData()
       recoverMissingData()
 
       console.log("Session initialization complete")
     } catch (error) {
       console.error("Error during dashboard initialization:", error)
-      // Show a toast notification for the error
       toast({
         title: "Initialization Error",
         description: "There was a problem loading your session data. Please refresh the page.",
@@ -72,12 +59,10 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Update the handleResumeUpload function to ensure data is properly stored
   const handleResumeUpload = (text) => {
     try {
       console.log("Resume upload handler called")
 
-      // If text is a string, it's coming directly from the text input
       const isTextOnly = typeof text === "string"
       console.log("Is text only:", isTextOnly)
 
@@ -86,21 +71,17 @@ export default function Dashboard() {
         setFileUploaded(true)
         setActiveStep(2)
 
-        // Validate the resume text
         const results = validateResume(text)
         setValidationResults(results)
 
-        // Store the validation results in session storage
         try {
           storeCompatibleAnalysisData("resumeAnalysis", results)
-          // Also store the raw text for potential reprocessing
           storeCompatibleAnalysisData("resumeText", text)
           console.log("Resume text stored successfully")
         } catch (storageError) {
           console.error("Error storing resume data:", storageError)
         }
 
-        // Log detected skills to console
         console.log("Resume Text Analysis Complete:")
         console.log("Technical Skills:", results.skills?.technical || [])
         console.log("Soft Skills:", results.skills?.soft || [])
@@ -108,14 +89,12 @@ export default function Dashboard() {
         return
       }
 
-      // Otherwise, handle as before for file uploads
       setResumeData(text)
       setFileUploaded(true)
       if (text.analysis) {
         setResumeAnalysis(text.analysis)
         setShowSkillsSummary(true)
 
-        // Ensure the analysis is stored in session storage
         try {
           storeCompatibleAnalysisData("resumeAnalysis", text.analysis)
           console.log("Resume analysis stored successfully")
@@ -123,7 +102,6 @@ export default function Dashboard() {
           console.error("Error storing resume analysis:", storageError)
         }
 
-        // Log detected skills to console
         console.log("Resume Analysis Complete:")
         console.log("Technical Skills:", text.analysis.skills?.technical || [])
         console.log("Soft Skills:", text.analysis.skills?.soft || [])
@@ -151,30 +129,19 @@ export default function Dashboard() {
     setJobData(data)
     if (data.analysis) {
       setJobAnalysis(data.analysis)
-      setShowJobSkillsLog(true) // Show skills log after job analysis
     }
     setActiveStep(3)
-    setActiveTab("focus")
   }
 
-  const handleRoleFocusSubmit = (focus) => {
-    setRoleFocus(focus)
-    // Navigate to analysis page
-  }
-
-  // Update the handleTextExtracted function to ensure data is properly stored
   const handleTextExtracted = (text: string) => {
     setResumeText(text)
     if (text.trim()) {
-      // Validate the resume text
       const results = validateResume(text)
       setValidationResults(results)
 
-      // Store both the raw text and the validation results
       storeCompatibleAnalysisData("resumeText", text)
       storeCompatibleAnalysisData("resumeAnalysis", results)
 
-      // Mark as uploaded so the next button works
       setFileUploaded(true)
 
       console.log("Text extracted and validated:", text.substring(0, 100) + "...")
@@ -210,25 +177,16 @@ export default function Dashboard() {
               >
                 3
               </div>
-              <div className={`h-0.5 w-12 ${activeStep >= 4 ? "bg-indigo-600" : "bg-gray-200"}`} />
-              <div
-                className={`flex h-8 w-8 items-center justify-center rounded-full ${activeStep >= 4 ? "bg-indigo-600 text-white" : "bg-gray-200"}`}
-              >
-                4
-              </div>
             </div>
           </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="resume" onClick={() => setActiveTab("resume")}>
                 Resume
               </TabsTrigger>
               <TabsTrigger value="job" onClick={() => setActiveTab("job")} disabled={activeStep < 2}>
                 Job Description
-              </TabsTrigger>
-              <TabsTrigger value="focus" onClick={() => setActiveTab("focus")} disabled={activeStep < 3}>
-                Role Focus
               </TabsTrigger>
             </TabsList>
             <TabsContent value="resume">
@@ -283,43 +241,14 @@ export default function Dashboard() {
                   >
                     Back
                   </Button>
-                  <Button
-                    onClick={() => {
-                      if (jobData) {
-                        setActiveStep(3)
-                        setActiveTab("focus")
-                      }
-                    }}
-                    disabled={!jobData}
-                    className="gap-1.5"
-                  >
-                    Next
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
+                  <Link href="/analyze">
+                    <Button disabled={!jobData} className="gap-1.5">
+                      Analyze
+                      <ArrowRight className="h-4 w-4" />
+                    </Button>
+                  </Link>
                 </CardFooter>
               </Card>
-
-              {jobAnalysis && (
-                <div className="mt-4 flex justify-end">
-                  <Button variant="outline" size="sm" onClick={() => setShowJobSkillsLog(!showJobSkillsLog)}>
-                    {showJobSkillsLog ? "Hide Skills Log" : "Show Skills Log"}
-                  </Button>
-                </div>
-              )}
-
-              {showJobSkillsLog && jobAnalysis && (
-                <div className="mt-4">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Job Skills Log</CardTitle>
-                      <CardDescription>Skills extracted from the job description</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <SkillsLogViewer inline={true} />
-                    </CardContent>
-                  </Card>
-                </div>
-              )}
 
               {jobAnalysis && (
                 <div className="mt-8">
@@ -327,54 +256,7 @@ export default function Dashboard() {
                 </div>
               )}
             </TabsContent>
-            <TabsContent value="focus">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Select Role Focus (Optional)</CardTitle>
-                  <CardDescription>
-                    Specify which aspect of the role you want to focus on for more targeted project suggestions.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <RoleFocusSelect onSubmit={handleRoleFocusSubmit} />
-                </CardContent>
-                <CardFooter className="flex justify-between">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setActiveStep(2)
-                      setActiveTab("job")
-                    }}
-                  >
-                    Back
-                  </Button>
-                  <Link href="/analyze">
-                    <Button className="gap-1.5">
-                      Analyze
-                      <ArrowRight className="h-4 w-4" />
-                    </Button>
-                  </Link>
-                </CardFooter>
-              </Card>
-            </TabsContent>
           </Tabs>
-        </div>
-        <SkillsLogViewer />
-        <DetailedSkillExtractionLog />
-        <div className="mt-8 text-center">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              debugLogAllStoredData()
-              toast({
-                title: "Debug Info",
-                description: "Session data logged to console",
-              })
-            }}
-          >
-            Debug: Log Session Data
-          </Button>
         </div>
       </main>
     </div>
