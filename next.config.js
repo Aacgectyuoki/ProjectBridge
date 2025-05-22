@@ -4,6 +4,7 @@
 const { withSentryConfig } = require("@sentry/nextjs")
 
 const nextConfig = {
+  output: 'export',
   reactStrictMode: true,
   swcMinify: true,
   eslint: {
