@@ -1,13 +1,56 @@
+'use client'
+
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ArrowRight, Briefcase, Code, FileText } from "lucide-react"
 import { ResponsiveContainer } from "@/components/responsive-container"
+import { supabase } from "@/lib/supabase"
+import { useRouter } from "next/navigation"
+import type { UserSession } from '@/lib/supabase'
 
 export default function Home() {
+  const router = useRouter()
+  const [user, setUser] = useState<UserSession['user']>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const checkUser = async () => {
+      try {
+        const { user, error } = await supabase.auth.getUser().then(({ data }) => ({
+          user: data.user,
+          error: null,
+        }))
+
+        if (error) {
+          throw error
+        }
+
+        setUser(user)
+      } catch (error) {
+        console.error('Error loading user:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    checkUser()
+  }, [])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <ResponsiveContainer>
       <div className="flex flex-col space-y-8">
-        {/* Removed the "Bridge Your Skills Gap" section */}
         <div className="flex flex-col min-h-screen">
           <main className="flex-1">
             <section className="w-full py-12 md:py-24 lg:py-32">
@@ -24,12 +67,21 @@ export default function Home() {
                       </p>
                     </div>
                     <div className="flex flex-col gap-2 min-[400px]:flex-row">
-                      <Link href="/dashboard">
-                        <Button size="lg" className="gap-1.5">
-                          Get Started
-                          <ArrowRight className="h-4 w-4" />
-                        </Button>
-                      </Link>
+                      {user ? (
+                        <Link href="/dashboard">
+                          <Button size="lg" className="gap-1.5">
+                            Go to Dashboard
+                            <ArrowRight className="h-4 w-4" />
+                          </Button>
+                        </Link>
+                      ) : (
+                        <Link href="/login">
+                          <Button size="lg" className="gap-1.5">
+                            Get Started
+                            <ArrowRight className="h-4 w-4" />
+                          </Button>
+                        </Link>
+                      )}
                     </div>
                   </div>
                   <div className="flex justify-center">

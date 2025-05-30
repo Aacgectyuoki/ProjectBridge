@@ -22,19 +22,49 @@ import {
   recoverMissingData,
   storeCompatibleAnalysisData,
 } from "@/utils/analysis-session-manager"
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import type { UserSession } from '@/lib/supabase'
 
 export default function Dashboard() {
+  const router = useRouter()
+  const [user, setUser] = useState<UserSession['user']>(null)
+  const [loading, setLoading] = useState(true)
   const [activeStep, setActiveStep] = useState(1)
   const [activeTab, setActiveTab] = useState("resume")
-  const [resumeData, setResumeData] = useState(null)
+  const [resumeData, setResumeData] = useState<{ analysis: ResumeAnalysisResult } | null>(null)
   const [resumeAnalysis, setResumeAnalysis] = useState<ResumeAnalysisResult | null>(null)
-  const [jobData, setJobData] = useState(null)
+  const [jobData, setJobData] = useState<{ analysis?: JobAnalysisResult } | null>(null)
   const [jobAnalysis, setJobAnalysis] = useState<JobAnalysisResult | null>(null)
   const [fileSelected, setFileSelected] = useState(false)
   const [fileUploaded, setFileUploaded] = useState(false)
   const [showSkillsSummary, setShowSkillsSummary] = useState(false)
   const [resumeText, setResumeText] = useState("")
   const [validationResults, setValidationResults] = useState<any>(null)
+
+  useEffect(() => {
+    const checkUser = async () => {
+      try {
+        const { user, error } = await supabase.auth.getUser().then(({ data }) => ({
+          user: data.user,
+          error: null,
+        }))
+
+        if (error || !user) {
+          throw error || new Error('No user found')
+        }
+
+        setUser(user)
+      } catch (error) {
+        console.error('Error loading user:', error)
+        router.push('/login')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    checkUser()
+  }, [router])
 
   useEffect(() => {
     try {
@@ -59,7 +89,7 @@ export default function Dashboard() {
     }
   }, [])
 
-  const handleResumeUpload = (text) => {
+  const handleResumeUpload = (text: string | { analysis: ResumeAnalysisResult }) => {
     try {
       console.log("Resume upload handler called")
 
@@ -67,11 +97,11 @@ export default function Dashboard() {
       console.log("Is text only:", isTextOnly)
 
       if (isTextOnly) {
-        setResumeText(text)
+        setResumeText(text as string)
         setFileUploaded(true)
         setActiveStep(2)
 
-        const results = validateResume(text)
+        const results = validateResume(text as string)
         setValidationResults(results)
 
         try {
@@ -91,7 +121,7 @@ export default function Dashboard() {
 
       setResumeData(text)
       setFileUploaded(true)
-      if (text.analysis) {
+      if ('analysis' in text) {
         setResumeAnalysis(text.analysis)
         setShowSkillsSummary(true)
 
@@ -121,11 +151,11 @@ export default function Dashboard() {
     }
   }
 
-  const handleFileSelection = (selected) => {
+  const handleFileSelection = (selected: boolean) => {
     setFileSelected(selected)
   }
 
-  const handleJobDescriptionSubmit = (data) => {
+  const handleJobDescriptionSubmit = (data: { analysis?: JobAnalysisResult }) => {
     setJobData(data)
     if (data.analysis) {
       setJobAnalysis(data.analysis)
@@ -150,113 +180,52 @@ export default function Dashboard() {
     }
   }
 
-  return (
-    <div className="flex flex-col min-h-screen">
-      <main className="flex-1 container py-8">
-        <div className="mx-auto max-w-4xl">
-          <div className="flex justify-between items-center mb-8">
-            <h1 className="text-3xl font-bold">Dashboard</h1>
-          </div>
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut()
+      router.push('/login')
+    } catch (error) {
+      console.error('Error signing out:', error)
+    }
+  }
 
-          <div className="mb-8">
-            <div className="flex items-center space-x-2">
-              <div
-                className={`flex h-8 w-8 items-center justify-center rounded-full ${activeStep >= 1 ? "bg-indigo-600 text-white" : "bg-gray-200"}`}
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <nav className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              <h1 className="text-xl font-semibold">Dashboard</h1>
+            </div>
+            <div className="flex items-center">
+              <span className="text-gray-600 mr-4">{user?.email}</span>
+              <button
+                onClick={handleSignOut}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
               >
-                1
-              </div>
-              <div className={`h-0.5 w-12 ${activeStep >= 2 ? "bg-indigo-600" : "bg-gray-200"}`} />
-              <div
-                className={`flex h-8 w-8 items-center justify-center rounded-full ${activeStep >= 2 ? "bg-indigo-600 text-white" : "bg-gray-200"}`}
-              >
-                2
-              </div>
-              <div className={`h-0.5 w-12 ${activeStep >= 3 ? "bg-indigo-600" : "bg-gray-200"}`} />
-              <div
-                className={`flex h-8 w-8 items-center justify-center rounded-full ${activeStep >= 3 ? "bg-indigo-600 text-white" : "bg-gray-200"}`}
-              >
-                3
-              </div>
+                Sign out
+              </button>
             </div>
           </div>
+        </div>
+      </nav>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="resume" onClick={() => setActiveTab("resume")}>
-                Resume
-              </TabsTrigger>
-              <TabsTrigger value="job" onClick={() => setActiveTab("job")} disabled={activeStep < 2}>
-                Job Description
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="resume">
-              <div className="space-y-6">
-                <ResumeUpload
-                  onUpload={handleResumeUpload}
-                  onFileSelect={handleFileSelection}
-                  onTextExtracted={handleTextExtracted}
-                />
-
-                {validationResults && <ResumeValidatorResults validationResults={validationResults} />}
-
-                {showSkillsSummary && resumeAnalysis && <SkillsSummary analysis={resumeAnalysis} />}
-
-                {resumeAnalysis && <ResumeAnalysisResults analysis={resumeAnalysis} />}
-
-                <div className="flex justify-end">
-                  <Button
-                    onClick={() => {
-                      if (resumeData || fileUploaded || resumeText) {
-                        setActiveStep(2)
-                        setActiveTab("job")
-                      }
-                    }}
-                    disabled={!resumeData && !fileUploaded && !resumeText}
-                    className="gap-1.5"
-                  >
-                    Next
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </TabsContent>
-            <TabsContent value="job">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Add Job Description</CardTitle>
-                  <CardDescription>
-                    Paste the job description you're interested in to identify skill gaps.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <JobDescriptionInput onSubmit={handleJobDescriptionSubmit} />
-                </CardContent>
-                <CardFooter className="flex justify-between">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setActiveStep(1)
-                      setActiveTab("resume")
-                    }}
-                  >
-                    Back
-                  </Button>
-                  <Link href="/analyze">
-                    <Button disabled={!jobData} className="gap-1.5">
-                      Analyze
-                      <ArrowRight className="h-4 w-4" />
-                    </Button>
-                  </Link>
-                </CardFooter>
-              </Card>
-
-              {jobAnalysis && (
-                <div className="mt-8">
-                  <JobAnalysisResults analysis={jobAnalysis} />
-                </div>
-              )}
-            </TabsContent>
-          </Tabs>
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="px-4 py-6 sm:px-0">
+          <div className="border-4 border-dashed border-gray-200 rounded-lg h-96 flex items-center justify-center">
+            <p className="text-gray-500 text-xl">Welcome to your dashboard!</p>
+          </div>
         </div>
       </main>
     </div>
