@@ -170,19 +170,23 @@ Guidelines:
 
   // 6) Build enhanced result
   const enhanced = { ...defaultEnhancedExtractedSkills }
-  Object.entries(extracted).forEach(([cat, list]) => {
-    if (Array.isArray(list)) {
-      list.forEach((skill: string) => {
-        if (!skill || typeof skill !== "string") return
-        const confidence = getSkillConfidence(skill, text)
-        enhanced[cat as keyof EnhancedExtractedSkills].push({ name: skill, confidence })
-        categorizeAISkill(skill).forEach((aiCat) => {
-          const key = `ai_${aiCat}` as keyof EnhancedExtractedSkills
-          if (enhanced[key]) enhanced[key].push({ name: skill, confidence })
+  if (extracted) {
+    Object.entries(extracted).forEach(([cat, list]) => {
+      if (Array.isArray(list)) {
+        list.forEach((skill: string) => {
+          if (!skill || typeof skill !== "string") return
+          const confidence = getSkillConfidence(skill, text)
+          if (cat in enhanced) {
+            enhanced[cat as keyof EnhancedExtractedSkills].push({ name: skill, confidence })
+            categorizeAISkill(skill).forEach((aiCat) => {
+              const key = `ai_${aiCat}` as keyof EnhancedExtractedSkills
+              if (enhanced[key]) enhanced[key].push({ name: skill, confidence })
+            })
+          }
         })
-      })
-    }
-  })
+      }
+    })
+  }
 
   // 7) Log and return
   EnhancedSkillsLogger.logExtractedSkills(
@@ -688,7 +692,7 @@ function ensureValidStructure(result: any, jobAnalysis?: JobAnalysisResult): Ski
  * Extract all skills from resume analysis
  */
 function getAllSkills(resumeAnalysis: ResumeAnalysisResult): Record<string, string[]> {
-  const skills = {
+  const skills: Record<string, string[]> = {
     technical: [],
     soft: [],
     tools: [],
@@ -697,19 +701,23 @@ function getAllSkills(resumeAnalysis: ResumeAnalysisResult): Record<string, stri
     databases: [],
     methodologies: [],
     platforms: [],
-    other: [],
-  }
+    other: []
+  };
 
-  // Copy skills from resume analysis
   if (resumeAnalysis.skills) {
-    Object.keys(resumeAnalysis.skills).forEach((key) => {
-      if (key in skills && Array.isArray(resumeAnalysis.skills[key])) {
-        skills[key] = [...resumeAnalysis.skills[key]]
-      }
-    })
+    // Handle each category, checking if it exists
+    if (resumeAnalysis.skills.technical) skills.technical = [...resumeAnalysis.skills.technical];
+    if (resumeAnalysis.skills.soft) skills.soft = [...resumeAnalysis.skills.soft];
+    if (resumeAnalysis.skills.tools) skills.tools = [...resumeAnalysis.skills.tools];
+    if (resumeAnalysis.skills.frameworks) skills.frameworks = [...resumeAnalysis.skills.frameworks];
+    if (resumeAnalysis.skills.languages) skills.languages = [...resumeAnalysis.skills.languages];
+    if (resumeAnalysis.skills.databases) skills.databases = [...resumeAnalysis.skills.databases];
+    if (resumeAnalysis.skills.methodologies) skills.methodologies = [...resumeAnalysis.skills.methodologies];
+    if (resumeAnalysis.skills.platforms) skills.platforms = [...resumeAnalysis.skills.platforms];
+    if (resumeAnalysis.skills.other) skills.other = [...resumeAnalysis.skills.other];
   }
 
-  return skills
+  return skills;
 }
 
 export async function analyzeSkillsGapFromResults(
